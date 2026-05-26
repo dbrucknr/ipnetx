@@ -18,6 +18,7 @@ A publishable README needs:
 
 Helpful References
 - https://cs.opensource.google/go/go/+/refs/tags/go1.22.0:src/net/netip/netip.go
+- https://oneuptime.com/blog/post/2026-02-01-rust-profiling-optimization/view
 
 
 Setup Testing Coverage
