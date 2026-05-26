@@ -69,3 +69,96 @@ impl<A: IpAddress> std::fmt::Display for IpPrefix<A> {
         write!(f, "{}/{}", self.ip, self.mask)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
+    // --- Construction ---
+
+    // cargo test prefix::tests::test_v4_prefix_new
+    #[test]
+    fn test_v4_prefix_new() {
+        let prefix = IpPrefix::<Ipv4Addr>::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap();
+        assert_eq!(prefix.ip(), Ipv4Addr::new(192, 168, 1, 0));
+        assert_eq!(prefix.mask(), 24);
+    }
+
+    // cargo test prefix::tests::test_v6_prefix_new
+    #[test]
+    fn test_v6_prefix_new() {
+        let prefix = IpPrefix::<Ipv6Addr>::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), 64).unwrap();
+        assert_eq!(prefix.ip(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
+        assert_eq!(prefix.mask(), 64);
+    }
+
+    // cargo test prefix::tests::test_v4_prefix_new_invalid_mask
+    #[test]
+    fn test_v4_prefix_new_invalid_mask() {
+        assert!(IpPrefix::<Ipv4Addr>::new(Ipv4Addr::new(192, 168, 1, 0), 33).is_err());
+    }
+
+    // cargo test prefix::tests::test_v6_prefix_new_invalid_mask
+    #[test]
+    fn test_v6_prefix_new_invalid_mask() {
+        assert!(IpPrefix::<Ipv6Addr>::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), 129).is_err());
+    }
+
+    // --- Contains ---
+
+    // cargo test prefix::tests::test_ip_v4_prefix_contains
+    #[test]
+    fn test_ip_v4_prefix_contains() {
+        let prefix = IpPrefix::<Ipv4Addr>::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap();
+        assert!(prefix.contains(Ipv4Addr::new(192, 168, 1, 10)));
+        assert!(!prefix.contains(Ipv4Addr::new(192, 168, 2, 10)));
+    }
+
+    // cargo test prefix::tests::test_ip_v4_prefix_not_contains
+    #[test]
+    fn test_ip_v4_prefix_not_contains() {
+        let prefix = IpPrefix::<Ipv4Addr>::new(Ipv4Addr::new(192, 168, 1, 0), 32).unwrap();
+        assert!(!prefix.contains(Ipv4Addr::new(192, 168, 1, 255)));
+    }
+
+    // cargo test prefix::tests::test_ip_v6_prefix_contains
+    #[test]
+    fn test_ip_v6_prefix_contains() {
+        let prefix = IpPrefix::<Ipv6Addr>::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), 64).unwrap();
+        assert!(prefix.contains(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)));
+    }
+
+    // cargo test prefix::tests::test_ip_v6_prefix_not_contains
+    #[test]
+    fn test_ip_v6_prefix_not_contains() {
+        let prefix = IpPrefix::<Ipv6Addr>::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), 64).unwrap();
+        assert!(!prefix.contains(Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 2)));
+    }
+
+    // --- To Range ---
+
+    // cargo test prefix::tests::test_ip_v4_prefix_to_range
+    #[test]
+    fn test_ip_v4_prefix_to_range() {
+        let prefix = IpPrefix::<Ipv4Addr>::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap();
+        let range = prefix.to_range();
+
+        assert_eq!(range.start(), Ipv4Addr::new(192, 168, 1, 0));
+        assert_eq!(range.end(), Ipv4Addr::new(192, 168, 1, 255));
+    }
+
+    // cargo test prefix::tests::test_ip_v6_prefix_to_range
+    #[test]
+    fn test_ip_v6_prefix_to_range() {
+        // /120 means 8 free host bits, so the last u16 group spans 0x00..0xff.
+        // The base must be the network address (host bits already zero): ::
+        // Compare to IPv4: 192.168.1.0/24, not 192.168.1.1/24.
+        let prefix =
+            IpPrefix::<Ipv6Addr>::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0), 120).unwrap();
+        let range = prefix.to_range();
+
+        assert_eq!(range.start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0x00)); // ::
+        assert_eq!(range.end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0xff));   // ::ff
+    }
+}
