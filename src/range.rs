@@ -1,7 +1,21 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 
+/// Sealed marker trait that restricts [`IpAddress`] implementations to
+/// [`Ipv4Addr`] and [`Ipv6Addr`] defined within this crate.
+///
+/// This is the "sealed trait" pattern: `Sealed` is `pub` inside a private
+/// module, so external crates cannot name it and therefore cannot implement
+/// [`IpAddress`] on their own types — even ones that satisfy all the other
+/// bounds like `Copy + PartialOrd + Display`.
 pub trait IpAddress:
-    PartialOrd + Copy + std::fmt::Display + std::fmt::Debug + PartialEq + Eq + std::hash::Hash
+    crate::private::Sealed
+    + PartialOrd
+    + Copy
+    + std::fmt::Display
+    + std::fmt::Debug
+    + PartialEq
+    + Eq
+    + std::hash::Hash
 {
     fn is_unspecified(&self) -> bool;
 }
@@ -185,10 +199,11 @@ mod tests {
     #[test]
     fn test_v6_contains() {
         let range = IpRange::new(
-            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
-            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x10),
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0xff),
         );
-        assert!(range.contains(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0)));
+        assert!(range.contains(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x20)));
+        assert!(!range.contains(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)));
     }
 
     // cargo test range::tests::test_v6_invalid_contains
