@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IpFamilyMismatch {
@@ -6,10 +6,21 @@ pub enum IpFamilyMismatch {
     V6V4,
 }
 
+// I wonder if the IpRange should accept a generic type that is either an IpAddr::V4 or IpAddr::V6?
+// Perhaps I should also consider prefix ranges?
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IpRange {
     start: IpAddr,
     end: IpAddr,
+}
+
+impl Default for IpRange {
+    fn default() -> Self {
+        Self {
+            start: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            end: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        }
+    }
 }
 
 impl IpRange {
@@ -35,7 +46,34 @@ impl IpRange {
     }
 
     pub fn contains(&self, ip: IpAddr) -> bool {
-        self.start <= ip && ip <= self.end
+        self.is_valid() && self.start <= ip && ip <= self.end
+    }
+
+    pub fn is_zero(&self) -> bool {
+        match (self.start, self.end) {
+            (IpAddr::V4(s), IpAddr::V4(e)) => s.is_unspecified() && e.is_unspecified(),
+            (IpAddr::V6(s), IpAddr::V6(e)) => s.is_unspecified() && e.is_unspecified(),
+            _ => false,
+        }
+    }
+
+    pub fn overlaps(&self, other: &IpRange) -> bool {
+        if !self.is_valid() || !other.is_valid() {
+            return false;
+        }
+        match (&self.start, &other.start) {
+            (IpAddr::V4(_), IpAddr::V6(_)) | (IpAddr::V6(_), IpAddr::V4(_)) => return false,
+            _ => {}
+        }
+        self.end >= other.start && self.start <= other.end
+    }
+
+    pub fn prefixes(&self) {
+        todo!()
+    }
+
+    pub fn prefix(&self) {
+        todo!()
     }
 }
 
@@ -159,6 +197,104 @@ mod tests {
     }
 
     #[test]
+    fn test_v4_overlaps() {
+        let range = IpRange::new(
+            IpAddr::V4(Ipv4Addr::new(1, 0, 0, 0)),
+            IpAddr::V4(Ipv4Addr::new(1, 255, 255, 255)),
+        )
+        .unwrap();
+
+        assert!(
+            range.overlaps(
+                &IpRange::new(
+                    IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
+                    IpAddr::V4(Ipv4Addr::new(1, 255, 255, 255)),
+                )
+                .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn test_v4_overlaps_no_overlap() {
+        let range = IpRange::new(
+            IpAddr::V4(Ipv4Addr::new(1, 0, 0, 0)),
+            IpAddr::V4(Ipv4Addr::new(1, 255, 255, 255)),
+        )
+        .unwrap();
+
+        assert!(
+            !range.overlaps(
+                &IpRange::new(
+                    IpAddr::V4(Ipv4Addr::new(2, 0, 0, 0)),
+                    IpAddr::V4(Ipv4Addr::new(2, 255, 255, 255)),
+                )
+                .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn test_v6_overlaps() {
+        let range = IpRange::new(
+            IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)),
+            IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 255)),
+        )
+        .unwrap();
+
+        assert!(
+            range.overlaps(
+                &IpRange::new(
+                    IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)),
+                    IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 255)),
+                )
+                .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn test_v6_overlaps_no_overlap() {
+        let range = IpRange::new(
+            IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)),
+            IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 255)),
+        )
+        .unwrap();
+
+        assert!(
+            !range.overlaps(
+                &IpRange::new(
+                    IpAddr::V6(Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 1)),
+                    IpAddr::V6(Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 255)),
+                )
+                .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn test_v4_is_zero() {
+        let range = IpRange::new(
+            IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
+            IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
+        )
+        .unwrap();
+
+        assert!(range.is_zero());
+    }
+
+    #[test]
+    fn test_v6_is_zero() {
+        let range = IpRange::new(
+            IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0)),
+            IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0)),
+        )
+        .unwrap();
+
+        assert!(range.is_zero());
+    }
+
+    #[test]
     fn test_v4_display() {
         let range = IpRange::new(
             IpAddr::V4(Ipv4Addr::new(1, 0, 0, 0)),
@@ -167,5 +303,16 @@ mod tests {
         .unwrap();
 
         assert_eq!(format!("{}", range), "1.0.0.0..1.255.255.255");
+    }
+
+    #[test]
+    fn test_v6_display() {
+        let range = IpRange::new(
+            IpAddr::V6(Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 1)),
+            IpAddr::V6(Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 255)),
+        )
+        .unwrap();
+
+        assert_eq!(format!("{}", range), "1::1..1::ff");
     }
 }
