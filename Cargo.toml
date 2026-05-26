@@ -2,3 +2,9 @@
 name = "ipnetx"
 version = "0.1.0"
 edition = "2024"
+description = "IP address range, prefix, and set operations for IPv4 and IPv6"
+license = "MIT"
+repository = "https://github.com/dbrucknr/ipnetx"
+readme = "README.md"
+keywords = ["ip", "network", "cidr", "ipv4", "ipv6"]
+categories = ["network-programming"]
