@@ -1,37 +1,6 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use crate::interfaces::IpAddress;
 
-/// Sealed marker trait that restricts [`IpAddress`] implementations to
-/// [`Ipv4Addr`] and [`Ipv6Addr`] defined within this crate.
-///
-/// This is the "sealed trait" pattern: `Sealed` is `pub` inside a private
-/// module, so external crates cannot name it and therefore cannot implement
-/// [`IpAddress`] on their own types — even ones that satisfy all the other
-/// bounds like `Copy + PartialOrd + Display`.
-pub trait IpAddress:
-    crate::private::Sealed
-    + PartialOrd
-    + Copy
-    + std::fmt::Display
-    + std::fmt::Debug
-    + PartialEq
-    + Eq
-    + std::hash::Hash
-{
-    fn is_unspecified(&self) -> bool;
-}
-
-impl IpAddress for Ipv4Addr {
-    fn is_unspecified(&self) -> bool {
-        Ipv4Addr::is_unspecified(self)
-    }
-}
-
-impl IpAddress for Ipv6Addr {
-    fn is_unspecified(&self) -> bool {
-        Ipv6Addr::is_unspecified(self)
-    }
-}
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IpRange<A: IpAddress> {
     start: A,
     end: A,
@@ -122,6 +91,26 @@ mod tests {
         assert_eq!(range.end(), Ipv4Addr::new(1, 255, 255, 255));
     }
 
+    // cargo test range::tests::test_v6_start
+    #[test]
+    fn test_v6_start() {
+        let range = IpRange::new(
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 255),
+        );
+        assert_eq!(range.start(), Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 1));
+    }
+
+    // cargo test range::tests::test_v6_end
+    #[test]
+    fn test_v6_end() {
+        let range = IpRange::new(
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 255),
+        );
+        assert_eq!(range.end(), Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 255));
+    }
+
     // --- Validity ---
 
     // cargo test range::tests::test_v4_valid
@@ -210,7 +199,7 @@ mod tests {
     #[test]
     fn test_v6_invalid_contains() {
         let range = IpRange::new(
-            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1),
             Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
         );
         assert!(!range.contains(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)));
@@ -275,6 +264,22 @@ mod tests {
         assert!(!valid.overlaps(&invalid));
     }
 
+    // cargo test range::tests::test_v4_adjacent_overlap
+    #[test]
+    fn test_v4_adjacent_overlap() {
+        let a = IpRange::new(Ipv4Addr::new(1, 0, 0, 0), Ipv4Addr::new(1, 0, 0, 5));
+        let b = IpRange::new(Ipv4Addr::new(1, 0, 0, 5), Ipv4Addr::new(1, 0, 0, 10));
+        assert!(a.overlaps(&b)); // shares 1.0.0.5
+    }
+
+    // cargo test range::tests::test_v4_complete_overlap
+    #[test]
+    fn test_v4_complete_overlap() {
+        let outer = IpRange::new(Ipv4Addr::new(1, 0, 0, 0), Ipv4Addr::new(1, 255, 255, 255));
+        let inner = IpRange::new(Ipv4Addr::new(1, 10, 0, 0), Ipv4Addr::new(1, 20, 0, 0));
+        assert!(outer.overlaps(&inner));
+    }
+
     // cargo test range::tests::test_v6_overlaps
     #[test]
     fn test_v6_overlaps() {
@@ -301,6 +306,48 @@ mod tests {
             Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 255),
         );
         assert!(!a.overlaps(&b));
+    }
+
+    // cargo test range::tests::test_v6_overlaps_invalid_range
+    #[test]
+    fn test_v6_overlaps_invalid_range() {
+        let valid = IpRange::new(
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 255),
+        );
+        let invalid = IpRange::new(
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 511),
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 255),
+        );
+        assert!(!valid.overlaps(&invalid));
+    }
+
+    // cargo test range::tests::test_v6_adjacent_overlap
+    #[test]
+    fn test_v6_adjacent_overlap() {
+        let a = IpRange::new(
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 255),
+        );
+        let b = IpRange::new(
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 255),
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 511),
+        );
+        assert!(a.overlaps(&b));
+    }
+
+    // cargo test range::tests::test_v6_complete_overlap
+    #[test]
+    fn test_v6_complete_overlap() {
+        let outer = IpRange::new(
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 255),
+        );
+        let inner = IpRange::new(
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 128),
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 200),
+        );
+        assert!(outer.overlaps(&inner));
     }
 
     // --- Display ---
