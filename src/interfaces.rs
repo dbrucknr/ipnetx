@@ -17,17 +17,46 @@ pub trait IpAddress:
     + Eq
     + std::hash::Hash
 {
+    /// Number of bits in this address type: 32 for IPv4, 128 for IPv6.
+    const BITS: u8;
+
     fn is_unspecified(&self) -> bool;
+
+    /// Convert this address to a u128. IPv4 uses the low 32 bits.
+    fn to_u128(self) -> u128;
+
+    /// Construct an address from a u128. IPv4 reads the low 32 bits.
+    fn from_u128(bits: u128) -> Self;
 }
 
 impl IpAddress for Ipv4Addr {
+    const BITS: u8 = 32;
+
     fn is_unspecified(&self) -> bool {
         Ipv4Addr::is_unspecified(self)
+    }
+
+    fn to_u128(self) -> u128 {
+        self.to_bits() as u128
+    }
+
+    fn from_u128(bits: u128) -> Self {
+        Ipv4Addr::from_bits(bits as u32)
     }
 }
 
 impl IpAddress for Ipv6Addr {
+    const BITS: u8 = 128;
+
     fn is_unspecified(&self) -> bool {
         Ipv6Addr::is_unspecified(self)
+    }
+
+    fn to_u128(self) -> u128 {
+        self.to_bits()
+    }
+
+    fn from_u128(bits: u128) -> Self {
+        Ipv6Addr::from_bits(bits)
     }
 }
