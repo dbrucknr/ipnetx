@@ -111,22 +111,31 @@ mod tests {
     #[test]
     fn test_ip_v4_prefix_contains() {
         let prefix = IpPrefix::<Ipv4Addr>::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap();
-        assert!(prefix.contains(Ipv4Addr::new(192, 168, 1, 10)));
-        assert!(!prefix.contains(Ipv4Addr::new(192, 168, 2, 10)));
+        assert!(prefix.contains(Ipv4Addr::new(192, 168, 1, 0))); // network address
+        assert!(prefix.contains(Ipv4Addr::new(192, 168, 1, 255))); // last address
+        assert!(!prefix.contains(Ipv4Addr::new(192, 167, 255, 255))); // just before
+        assert!(!prefix.contains(Ipv4Addr::new(192, 168, 2, 0))); // just after
     }
 
     // cargo test prefix::tests::test_ip_v4_prefix_not_contains
     #[test]
     fn test_ip_v4_prefix_not_contains() {
         let prefix = IpPrefix::<Ipv4Addr>::new(Ipv4Addr::new(192, 168, 1, 0), 32).unwrap();
-        assert!(!prefix.contains(Ipv4Addr::new(192, 168, 1, 255)));
+        assert!(prefix.contains(Ipv4Addr::new(192, 168, 1, 0))); // the only IP in /32
+        assert!(!prefix.contains(Ipv4Addr::new(192, 168, 1, 1))); // immediately outside
     }
 
     // cargo test prefix::tests::test_ip_v6_prefix_contains
     #[test]
     fn test_ip_v6_prefix_contains() {
-        let prefix = IpPrefix::<Ipv6Addr>::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), 64).unwrap();
-        assert!(prefix.contains(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)));
+        // 2001:db8::/64 — the RFC 3849 documentation prefix
+        let prefix =
+            IpPrefix::<Ipv6Addr>::new(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0), 64).unwrap();
+        assert!(prefix.contains(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1))); // first host
+        assert!(prefix.contains(Ipv6Addr::new(
+            0x2001, 0x0db8, 0, 0, 0xffff, 0xffff, 0xffff, 0xffff
+        ))); // last
+        assert!(!prefix.contains(Ipv6Addr::new(0x2001, 0x0db9, 0, 0, 0, 0, 0, 0))); // different /64
     }
 
     // cargo test prefix::tests::test_ip_v6_prefix_not_contains
@@ -148,17 +157,65 @@ mod tests {
         assert_eq!(range.end(), Ipv4Addr::new(192, 168, 1, 255));
     }
 
+    // cargo test prefix::tests::test_ip_v4_prefix_to_range_entire_addr_space
+    #[test]
+    fn test_ip_v4_prefix_to_range_entire_addr_space() {
+        let prefix = IpPrefix::<Ipv4Addr>::new(Ipv4Addr::new(0, 0, 0, 0), 0).unwrap();
+        let range = prefix.to_range();
+
+        assert_eq!(range.start(), Ipv4Addr::new(0, 0, 0, 0));
+        assert_eq!(range.end(), Ipv4Addr::new(255, 255, 255, 255));
+    }
+
+    // cargo test prefix::tests::test_ip_v4_prefix_to_range_single_host
+    #[test]
+    fn test_ip_v4_prefix_to_range_single_host() {
+        let prefix = IpPrefix::<Ipv4Addr>::new(Ipv4Addr::new(192, 168, 1, 0), 32).unwrap();
+        let range = prefix.to_range();
+
+        assert_eq!(range.start(), Ipv4Addr::new(192, 168, 1, 0));
+        assert_eq!(range.end(), Ipv4Addr::new(192, 168, 1, 0));
+    }
+
     // cargo test prefix::tests::test_ip_v6_prefix_to_range
     #[test]
     fn test_ip_v6_prefix_to_range() {
         // /120 means 8 free host bits, so the last u16 group spans 0x00..0xff.
         // The base must be the network address (host bits already zero): ::
         // Compare to IPv4: 192.168.1.0/24, not 192.168.1.1/24.
-        let prefix =
-            IpPrefix::<Ipv6Addr>::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0), 120).unwrap();
+        let prefix = IpPrefix::<Ipv6Addr>::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0), 120).unwrap();
         let range = prefix.to_range();
 
         assert_eq!(range.start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0x00)); // ::
-        assert_eq!(range.end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0xff));   // ::ff
+        assert_eq!(range.end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0xff)); // ::ff
+    }
+
+    // cargo test prefix::tests::test_ip_v6_prefix_to_range_single_host
+    #[test]
+    fn test_ip_v6_prefix_to_range_single_host() {
+        let prefix =
+            IpPrefix::<Ipv6Addr>::new(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1), 128)
+                .unwrap();
+        let range = prefix.to_range();
+
+        assert_eq!(
+            range.start(),
+            Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1)
+        );
+        assert_eq!(range.end(), Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1));
+    }
+
+    // cargo test prefix::tests::test_ip_v4_prefix_display
+    #[test]
+    fn test_ip_v4_prefix_display() {
+        let prefix = IpPrefix::<Ipv4Addr>::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap();
+        assert_eq!(format!("{}", prefix), "192.168.1.0/24");
+    }
+
+    // cargo test prefix::tests::test_ip_v6_prefix_display
+    #[test]
+    fn test_ip_v6_prefix_display() {
+        let prefix = IpPrefix::<Ipv6Addr>::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0), 120).unwrap();
+        assert_eq!(format!("{}", prefix), "::/120");
     }
 }
