@@ -339,8 +339,14 @@ mod tests {
         builder.add_prefix(prefix);
         let ipset = builder.build();
         assert_eq!(ipset.len(), 1);
-        assert_eq!(ipset.ranges()[0].start(), Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 0));
-        assert_eq!(ipset.ranges()[0].end(), Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 255));
+        assert_eq!(
+            ipset.ranges()[0].start(),
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 0)
+        );
+        assert_eq!(
+            ipset.ranges()[0].end(),
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 255)
+        );
     }
 
     // cargo test ipset::tests::test_v4_builder_overlapping_ranges_merged
@@ -383,9 +389,12 @@ mod tests {
     #[test]
     fn test_v4_contains_ip_start_boundary() {
         let mut builder = IpSetBuilder::<Ipv4Addr>::new();
-        builder.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(10, 0, 0, 10)));
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 10),
+        ));
         let ipset = builder.build();
-        assert!(ipset.contains_ip(Ipv4Addr::new(10, 0, 0, 1)));  // inclusive
+        assert!(ipset.contains_ip(Ipv4Addr::new(10, 0, 0, 1))); // inclusive
         assert!(!ipset.contains_ip(Ipv4Addr::new(10, 0, 0, 0))); // just before
     }
 
@@ -393,9 +402,12 @@ mod tests {
     #[test]
     fn test_v4_contains_ip_end_boundary() {
         let mut builder = IpSetBuilder::<Ipv4Addr>::new();
-        builder.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(10, 0, 0, 10)));
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 10),
+        ));
         let ipset = builder.build();
-        assert!(ipset.contains_ip(Ipv4Addr::new(10, 0, 0, 10)));  // inclusive
+        assert!(ipset.contains_ip(Ipv4Addr::new(10, 0, 0, 10))); // inclusive
         assert!(!ipset.contains_ip(Ipv4Addr::new(10, 0, 0, 11))); // just after
     }
 
@@ -404,12 +416,18 @@ mod tests {
     fn test_v4_contains_ip_in_gap() {
         // Two ranges with a gap at .6..=.9
         let mut builder = IpSetBuilder::<Ipv4Addr>::new();
-        builder.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(10, 0, 0, 5)));
-        builder.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 10), Ipv4Addr::new(10, 0, 0, 20)));
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 5),
+        ));
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 10),
+            Ipv4Addr::new(10, 0, 0, 20),
+        ));
         let ipset = builder.build();
-        assert!(!ipset.contains_ip(Ipv4Addr::new(10, 0, 0, 7)));  // in the gap
-        assert!(ipset.contains_ip(Ipv4Addr::new(10, 0, 0, 5)));   // last of first range
-        assert!(ipset.contains_ip(Ipv4Addr::new(10, 0, 0, 10)));  // first of second range
+        assert!(!ipset.contains_ip(Ipv4Addr::new(10, 0, 0, 7))); // in the gap
+        assert!(ipset.contains_ip(Ipv4Addr::new(10, 0, 0, 5))); // last of first range
+        assert!(ipset.contains_ip(Ipv4Addr::new(10, 0, 0, 10))); // first of second range
     }
 
     // cargo test ipset::tests::test_v6_contains_ip_in_gap
@@ -441,7 +459,10 @@ mod tests {
     #[test]
     fn test_v4_contains_range_fully_contained() {
         let mut builder = IpSetBuilder::<Ipv4Addr>::new();
-        builder.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 100)));
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 0),
+            Ipv4Addr::new(10, 0, 0, 100),
+        ));
         let ipset = builder.build();
         let query = IpRange::new(Ipv4Addr::new(10, 0, 0, 10), Ipv4Addr::new(10, 0, 0, 50));
         assert!(ipset.contains_range(query));
@@ -452,7 +473,10 @@ mod tests {
     fn test_v4_contains_range_exact_match() {
         // A range identical to a stored range is contained
         let mut builder = IpSetBuilder::<Ipv4Addr>::new();
-        builder.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 100)));
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 0),
+            Ipv4Addr::new(10, 0, 0, 100),
+        ));
         let ipset = builder.build();
         let query = IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 100));
         assert!(ipset.contains_range(query));
@@ -463,8 +487,14 @@ mod tests {
     fn test_v4_contains_range_spans_gap() {
         // Query crosses the gap between two stored ranges — not fully contained
         let mut builder = IpSetBuilder::<Ipv4Addr>::new();
-        builder.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 10)));
-        builder.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 20), Ipv4Addr::new(10, 0, 0, 30)));
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 0),
+            Ipv4Addr::new(10, 0, 0, 10),
+        ));
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 20),
+            Ipv4Addr::new(10, 0, 0, 30),
+        ));
         let ipset = builder.build();
         let query = IpRange::new(Ipv4Addr::new(10, 0, 0, 5), Ipv4Addr::new(10, 0, 0, 25));
         assert!(!ipset.contains_range(query));
@@ -475,7 +505,10 @@ mod tests {
     fn test_v4_contains_range_exceeds_stored() {
         // Query is larger than any stored range — not contained
         let mut builder = IpSetBuilder::<Ipv4Addr>::new();
-        builder.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 10), Ipv4Addr::new(10, 0, 0, 20)));
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 10),
+            Ipv4Addr::new(10, 0, 0, 20),
+        ));
         let ipset = builder.build();
         let query = IpRange::new(Ipv4Addr::new(10, 0, 0, 5), Ipv4Addr::new(10, 0, 0, 25));
         assert!(!ipset.contains_range(query));
@@ -485,7 +518,10 @@ mod tests {
     #[test]
     fn test_v4_contains_range_invalid_input() {
         let mut builder = IpSetBuilder::<Ipv4Addr>::new();
-        builder.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 100)));
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 0),
+            Ipv4Addr::new(10, 0, 0, 100),
+        ));
         let ipset = builder.build();
         let invalid = IpRange::new(Ipv4Addr::new(10, 0, 0, 50), Ipv4Addr::new(10, 0, 0, 10));
         assert!(!ipset.contains_range(invalid));
@@ -533,11 +569,17 @@ mod tests {
     #[test]
     fn test_v4_overlaps_ip_set_overlap() {
         let mut b1 = IpSetBuilder::<Ipv4Addr>::new();
-        b1.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 20)));
+        b1.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 0),
+            Ipv4Addr::new(10, 0, 0, 20),
+        ));
         let set1 = b1.build();
 
         let mut b2 = IpSetBuilder::<Ipv4Addr>::new();
-        b2.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 10), Ipv4Addr::new(10, 0, 0, 30)));
+        b2.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 10),
+            Ipv4Addr::new(10, 0, 0, 30),
+        ));
         let set2 = b2.build();
 
         assert!(set1.overlaps_ip_set(&set2));
@@ -548,11 +590,17 @@ mod tests {
     #[test]
     fn test_v4_overlaps_ip_set_disjoint() {
         let mut b1 = IpSetBuilder::<Ipv4Addr>::new();
-        b1.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 10)));
+        b1.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 0),
+            Ipv4Addr::new(10, 0, 0, 10),
+        ));
         let set1 = b1.build();
 
         let mut b2 = IpSetBuilder::<Ipv4Addr>::new();
-        b2.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 20), Ipv4Addr::new(10, 0, 0, 30)));
+        b2.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 20),
+            Ipv4Addr::new(10, 0, 0, 30),
+        ));
         let set2 = b2.build();
 
         assert!(!set1.overlaps_ip_set(&set2));
@@ -563,7 +611,10 @@ mod tests {
     #[test]
     fn test_v4_overlaps_ip_set_empty() {
         let mut b1 = IpSetBuilder::<Ipv4Addr>::new();
-        b1.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 10)));
+        b1.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 0),
+            Ipv4Addr::new(10, 0, 0, 10),
+        ));
         let populated = b1.build();
         let empty = IpSetBuilder::<Ipv4Addr>::new().build();
 
@@ -577,11 +628,17 @@ mod tests {
     fn test_v4_overlaps_ip_set_single_address_touch() {
         // The sets share exactly one address (10.0.0.10) — that counts as overlap
         let mut b1 = IpSetBuilder::<Ipv4Addr>::new();
-        b1.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 10)));
+        b1.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 0),
+            Ipv4Addr::new(10, 0, 0, 10),
+        ));
         let set1 = b1.build();
 
         let mut b2 = IpSetBuilder::<Ipv4Addr>::new();
-        b2.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 10), Ipv4Addr::new(10, 0, 0, 20)));
+        b2.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 10),
+            Ipv4Addr::new(10, 0, 0, 20),
+        ));
         let set2 = b2.build();
 
         assert!(set1.overlaps_ip_set(&set2));
@@ -592,11 +649,17 @@ mod tests {
     fn test_v4_overlaps_ip_set_subset() {
         // One set fully inside the other — still overlaps
         let mut b1 = IpSetBuilder::<Ipv4Addr>::new();
-        b1.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 100)));
+        b1.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 0),
+            Ipv4Addr::new(10, 0, 0, 100),
+        ));
         let outer = b1.build();
 
         let mut b2 = IpSetBuilder::<Ipv4Addr>::new();
-        b2.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 40), Ipv4Addr::new(10, 0, 0, 60)));
+        b2.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 40),
+            Ipv4Addr::new(10, 0, 0, 60),
+        ));
         let inner = b2.build();
 
         assert!(outer.overlaps_ip_set(&inner));
@@ -678,6 +741,21 @@ mod tests {
         assert_eq!(prefixes[0].mask(), 24);
     }
 
+    // cargo test ipset::tests::test_v6_ipset_prefixes_single_range
+    #[test]
+    fn test_v6_ipset_prefixes_single_range() {
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 255),
+        ));
+        let ipset = builder.build();
+        let prefixes = ipset.prefixes();
+        assert_eq!(prefixes.len(), 1);
+        assert_eq!(prefixes[0].ip(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(prefixes[0].mask(), 120);
+    }
+
     // cargo test ipset::tests::test_v4_ipset_prefixes_multiple_ranges
     #[test]
     fn test_v4_ipset_prefixes_multiple_ranges() {
@@ -700,10 +778,38 @@ mod tests {
         assert_eq!(prefixes[1].mask(), 24);
     }
 
+    // cargo test ipset::tests::test_v6_ipset_prefixes_multiple_ranges
+    #[test]
+    fn test_v6_ipset_prefixes_multiple_ranges() {
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 255),
+        ));
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(2001, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(2001, 0, 0, 0, 0, 0, 0, 255),
+        ));
+        let ipset = builder.build();
+        let prefixes = ipset.prefixes();
+        assert_eq!(prefixes.len(), 2);
+        assert_eq!(prefixes[0].ip(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(prefixes[0].mask(), 120);
+        assert_eq!(prefixes[1].ip(), Ipv6Addr::new(2001, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(prefixes[1].mask(), 120);
+    }
+
     // cargo test ipset::tests::test_v4_ipset_prefixes_empty_set
     #[test]
     fn test_v4_ipset_prefixes_empty_set() {
         let ipset = IpSetBuilder::<Ipv4Addr>::new().build();
+        assert!(ipset.prefixes().is_empty());
+    }
+
+    // cargo test ipset::tests::test_v6_ipset_prefixes_empty_set
+    #[test]
+    fn test_v6_ipset_prefixes_empty_set() {
+        let ipset = IpSetBuilder::<Ipv6Addr>::new().build();
         assert!(ipset.prefixes().is_empty());
     }
 
