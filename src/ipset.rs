@@ -106,7 +106,27 @@ impl<A: IpAddress> IpSet<A> {
     }
 
     pub fn overlaps_ip_set(&self, other: &IpSet<A>) -> bool {
-        todo!()
+        // Both sets are sorted and non-overlapping (guaranteed by the IpSetBuilder's .build())
+        // We can walk them together in O(n + m) time rather than O(n * m) if we were to loop over all pairs (nested loops)
+        let mut i = 0;
+        let mut j = 0;
+
+        while i < self.ranges.len() && j < other.ranges.len() {
+            let a = &self.ranges[i];
+            let b = &other.ranges[j];
+
+            if a.overlaps(b) {
+                return true;
+            }
+
+            if a.end().to_u128() < b.end().to_u128() {
+                i += 1;
+            } else {
+                j += 1;
+            }
+        }
+
+        false
     }
 
     pub fn len(&self) -> usize {
