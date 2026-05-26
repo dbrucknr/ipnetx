@@ -23,6 +23,7 @@ impl<A: IpAddress> IpRange<A> {
         self.start <= self.end
     }
 
+    // Answers the question: "Is this IP entirely enclosed by this range?"
     pub fn contains(&self, ip: A) -> bool {
         self.is_valid() && self.start <= ip && ip <= self.end
     }
@@ -31,6 +32,7 @@ impl<A: IpAddress> IpRange<A> {
         self.start.is_unspecified() && self.end.is_unspecified()
     }
 
+    // Answers the question: "does this share any IPs with the other range?"
     pub fn overlaps(&self, other: &IpRange<A>) -> bool {
         self.is_valid() && other.is_valid() && self.end >= other.start && self.start <= other.end
     }
@@ -553,7 +555,9 @@ mod tests {
         // entire range collapses into a single ::/0 prefix.
         let range = IpRange::new(
             Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
-            Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff),
+            Ipv6Addr::new(
+                0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
+            ),
         );
         let prefixes = range.prefixes();
 
@@ -565,7 +569,10 @@ mod tests {
     // cargo test range::tests::test_v4_prefixes_invalid_range
     #[test]
     fn test_v4_prefixes_invalid_range() {
-        let range = IpRange::new(Ipv4Addr::new(192, 168, 1, 255), Ipv4Addr::new(192, 168, 1, 0));
+        let range = IpRange::new(
+            Ipv4Addr::new(192, 168, 1, 255),
+            Ipv4Addr::new(192, 168, 1, 0),
+        );
         assert!(range.prefixes().is_empty());
     }
 
