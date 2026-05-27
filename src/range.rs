@@ -1,5 +1,40 @@
 use crate::{interfaces::IpAddress, prefix::IpPrefix};
 
+/// Error returned when parsing an [`IpRange`] from a string fails.
+///
+/// Produced by `"10.0.0.1..10.0.0.255".parse::<IpRange<Ipv4Addr>>()` on
+/// failure. The separator between start and end is `..` — the same token
+/// used by [`Display`](std::fmt::Display).
+///
+/// # Variants at a glance
+///
+/// | Input | Variant |
+/// |---|---|
+/// | `"10.0.0.1-10.0.0.255"` (wrong separator) | `MissingSeparator` |
+/// | `"999.0.0.1..10.0.0.255"` | `InvalidStart` |
+/// | `"10.0.0.1..999.0.0.255"` | `InvalidEnd` |
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseRangeError {
+    /// The input did not contain a `..` separator.
+    MissingSeparator,
+    /// The part before `..` is not a valid IP address for this address family.
+    InvalidStart,
+    /// The part after `..` is not a valid IP address for this address family.
+    InvalidEnd,
+}
+
+impl std::fmt::Display for ParseRangeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingSeparator => f.write_str("missing '..' separator"),
+            Self::InvalidStart => f.write_str("invalid start address"),
+            Self::InvalidEnd => f.write_str("invalid end address"),
+        }
+    }
+}
+
+impl std::error::Error for ParseRangeError {}
+
 /// An inclusive IP address range `[start, end]`.
 ///
 /// A range is *valid* when `start <= end`. An invalid range (`start > end`)
@@ -206,6 +241,53 @@ impl<A: IpAddress> IpRange<A> {
 impl<A: IpAddress> std::fmt::Display for IpRange<A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}..{}", self.start, self.end)
+    }
+}
+
+impl<A: IpAddress> std::str::FromStr for IpRange<A> {
+    type Err = ParseRangeError;
+
+    /// Parses an inclusive IP range from its canonical string form
+    /// `"<start>..<end>"`.
+    ///
+    /// The `..` separator matches what [`Display`](std::fmt::Display) produces,
+    /// so a round-trip `range.to_string().parse()` always succeeds. The
+    /// separator `..` is unambiguous even for IPv6 because no valid IPv6
+    /// address contains consecutive dots.
+    ///
+    /// Construction always succeeds once both addresses parse — an inverted
+    /// range (`start > end`) is representable and simply treated as empty by
+    /// all operations. Use [`is_valid`](IpRange::is_valid) to check after
+    /// parsing if needed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::net::{Ipv4Addr, Ipv6Addr};
+    /// use ipnetx::range::IpRange;
+    ///
+    /// // IPv4
+    /// let r: IpRange<Ipv4Addr> = "10.0.0.1..10.0.0.255".parse().unwrap();
+    /// assert_eq!(r.start(), Ipv4Addr::new(10, 0, 0, 1));
+    /// assert_eq!(r.end(),   Ipv4Addr::new(10, 0, 0, 255));
+    /// assert_eq!(r.to_string(), "10.0.0.1..10.0.0.255");
+    ///
+    /// // IPv6
+    /// let r6: IpRange<Ipv6Addr> = "2001:db8::1..2001:db8::ff".parse().unwrap();
+    /// assert!(r6.is_valid());
+    ///
+    /// // Errors
+    /// assert!("10.0.0.1-10.0.0.255".parse::<IpRange<Ipv4Addr>>().is_err()); // wrong sep
+    /// assert!("999.0.0.1..10.0.0.255".parse::<IpRange<Ipv4Addr>>().is_err()); // bad start
+    /// assert!("10.0.0.1..999.0.0.255".parse::<IpRange<Ipv4Addr>>().is_err()); // bad end
+    /// ```
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (start_str, end_str) = s
+            .split_once("..")
+            .ok_or(ParseRangeError::MissingSeparator)?;
+        let start = A::parse_addr(start_str).ok_or(ParseRangeError::InvalidStart)?;
+        let end = A::parse_addr(end_str).ok_or(ParseRangeError::InvalidEnd)?;
+        Ok(IpRange::new(start, end))
     }
 }
 
@@ -894,5 +976,104 @@ mod tests {
             Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 255),
         );
         assert_eq!(format!("{}", range), "1::1..1::ff");
+    }
+
+    // --- FromStr ---
+
+    // cargo test range::tests::test_v4_parse_valid
+    #[test]
+    fn test_v4_parse_valid() {
+        let r: IpRange<Ipv4Addr> = "10.0.0.1..10.0.0.255".parse().unwrap();
+        assert_eq!(r.start(), Ipv4Addr::new(10, 0, 0, 1));
+        assert_eq!(r.end(), Ipv4Addr::new(10, 0, 0, 255));
+        assert!(r.is_valid());
+    }
+
+    // cargo test range::tests::test_v4_parse_single_ip
+    #[test]
+    fn test_v4_parse_single_ip() {
+        let r: IpRange<Ipv4Addr> = "10.0.0.1..10.0.0.1".parse().unwrap();
+        assert_eq!(r.start(), r.end());
+        assert!(r.is_valid());
+    }
+
+    // cargo test range::tests::test_v4_parse_inverted_is_representable
+    #[test]
+    fn test_v4_parse_inverted_is_representable() {
+        // Parsing succeeds (construction always succeeds); is_valid() returns false.
+        let r: IpRange<Ipv4Addr> = "10.0.0.255..10.0.0.1".parse().unwrap();
+        assert!(!r.is_valid());
+    }
+
+    // cargo test range::tests::test_v4_parse_round_trip
+    #[test]
+    fn test_v4_parse_round_trip() {
+        let s = "192.168.1.0..192.168.1.255";
+        let r: IpRange<Ipv4Addr> = s.parse().unwrap();
+        assert_eq!(r.to_string(), s);
+    }
+
+    // cargo test range::tests::test_v4_parse_missing_separator
+    #[test]
+    fn test_v4_parse_missing_separator() {
+        // Common mistake: using '-' instead of '..'
+        let err = "10.0.0.1-10.0.0.255".parse::<IpRange<Ipv4Addr>>().unwrap_err();
+        assert_eq!(err, ParseRangeError::MissingSeparator);
+    }
+
+    // cargo test range::tests::test_v4_parse_invalid_start
+    #[test]
+    fn test_v4_parse_invalid_start() {
+        let err = "999.0.0.1..10.0.0.255".parse::<IpRange<Ipv4Addr>>().unwrap_err();
+        assert_eq!(err, ParseRangeError::InvalidStart);
+    }
+
+    // cargo test range::tests::test_v4_parse_invalid_end
+    #[test]
+    fn test_v4_parse_invalid_end() {
+        let err = "10.0.0.1..999.0.0.255".parse::<IpRange<Ipv4Addr>>().unwrap_err();
+        assert_eq!(err, ParseRangeError::InvalidEnd);
+    }
+
+    // cargo test range::tests::test_v4_parse_error_display
+    #[test]
+    fn test_v4_parse_error_display() {
+        assert_eq!(ParseRangeError::MissingSeparator.to_string(), "missing '..' separator");
+        assert_eq!(ParseRangeError::InvalidStart.to_string(), "invalid start address");
+        assert_eq!(ParseRangeError::InvalidEnd.to_string(), "invalid end address");
+    }
+
+    // cargo test range::tests::test_v6_parse_valid
+    #[test]
+    fn test_v6_parse_valid() {
+        let r: IpRange<Ipv6Addr> = "2001:db8::1..2001:db8::ff".parse().unwrap();
+        assert_eq!(r.start(), Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1));
+        assert_eq!(r.end(), Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0xff));
+        assert!(r.is_valid());
+    }
+
+    // cargo test range::tests::test_v6_parse_compressed_address
+    #[test]
+    fn test_v6_parse_compressed_address() {
+        // The '::'  compressed form must not confuse the '..' separator
+        let r: IpRange<Ipv6Addr> = "::..::1".parse().unwrap();
+        assert_eq!(r.start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(r.end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
+        assert!(r.is_valid());
+    }
+
+    // cargo test range::tests::test_v6_parse_round_trip
+    #[test]
+    fn test_v6_parse_round_trip() {
+        let s = "2001:db8::1..2001:db8::ff";
+        let r: IpRange<Ipv6Addr> = s.parse().unwrap();
+        assert_eq!(r.to_string(), s);
+    }
+
+    // cargo test range::tests::test_v6_parse_rejects_v4_address
+    #[test]
+    fn test_v6_parse_rejects_v4_address() {
+        let err = "10.0.0.1..10.0.0.255".parse::<IpRange<Ipv6Addr>>().unwrap_err();
+        assert_eq!(err, ParseRangeError::InvalidStart);
     }
 }

@@ -29,6 +29,15 @@ pub trait IpAddress:
 
     /// Construct an address from a u128. IPv4 reads the low 32 bits.
     fn from_u128(bits: u128) -> Self;
+
+    /// Parse an IP address from its text representation.
+    ///
+    /// Returns `None` if the string is not a valid address for this address
+    /// family (`Ipv4Addr` rejects IPv6 notation and vice-versa).
+    /// This is used internally by the [`FromStr`](std::str::FromStr)
+    /// implementations on [`IpPrefix`](crate::prefix::IpPrefix) and
+    /// [`IpRange`](crate::range::IpRange).
+    fn parse_addr(s: &str) -> Option<Self>;
 }
 
 impl IpAddress for Ipv4Addr {
@@ -45,6 +54,10 @@ impl IpAddress for Ipv4Addr {
     fn from_u128(bits: u128) -> Self {
         Ipv4Addr::from_bits(bits as u32)
     }
+
+    fn parse_addr(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
 }
 
 impl IpAddress for Ipv6Addr {
@@ -60,5 +73,9 @@ impl IpAddress for Ipv6Addr {
 
     fn from_u128(bits: u128) -> Self {
         Ipv6Addr::from_bits(bits)
+    }
+
+    fn parse_addr(s: &str) -> Option<Self> {
+        s.parse().ok()
     }
 }

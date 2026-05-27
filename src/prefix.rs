@@ -31,6 +31,41 @@ pub struct IpPrefix<A: IpAddress> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InvalidPrefixLen;
 
+/// Error returned when parsing an [`IpPrefix`] from a string fails.
+///
+/// Produced by `"192.168.1.0/24".parse::<IpPrefix<Ipv4Addr>>()` on failure.
+///
+/// # Variants at a glance
+///
+/// | Input | Variant |
+/// |---|---|
+/// | `"192.168.1.0"` (no slash) | `MissingSeparator` |
+/// | `"999.0.0.0/24"` | `InvalidAddress` |
+/// | `"192.168.1.0/abc"` | `InvalidMask` |
+/// | `"192.168.1.0/33"` (> 32 for IPv4) | `InvalidMask` |
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParsePrefixError {
+    /// The input did not contain a `/` separator.
+    MissingSeparator,
+    /// The part before `/` is not a valid IP address for this address family.
+    InvalidAddress,
+    /// The part after `/` is not a valid decimal integer, or exceeds the
+    /// address bit width (`> 32` for IPv4, `> 128` for IPv6).
+    InvalidMask,
+}
+
+impl std::fmt::Display for ParsePrefixError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingSeparator => f.write_str("missing '/' separator"),
+            Self::InvalidAddress => f.write_str("invalid IP address"),
+            Self::InvalidMask => f.write_str("invalid prefix length"),
+        }
+    }
+}
+
+impl std::error::Error for ParsePrefixError {}
+
 impl<A: IpAddress> IpPrefix<A> {
     /// Creates a new prefix from an IP address and a prefix length.
     ///
@@ -165,6 +200,52 @@ impl<A: IpAddress> IpPrefix<A> {
 impl<A: IpAddress> std::fmt::Display for IpPrefix<A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/{}", self.ip, self.mask)
+    }
+}
+
+impl<A: IpAddress> std::str::FromStr for IpPrefix<A> {
+    type Err = ParsePrefixError;
+
+    /// Parses a CIDR prefix from its canonical string form `"<addr>/<len>"`.
+    ///
+    /// The address is parsed by the address family (`Ipv4Addr` or `Ipv6Addr`)
+    /// determined by the turbofish or inference context. The prefix length must
+    /// be a decimal integer in `[0, A::BITS]`.
+    ///
+    /// Host bits in the address are preserved, matching the behaviour of
+    /// [`IpPrefix::new`]. Use [`.masked()`](IpPrefix::masked) on the result to
+    /// zero them if canonical form is needed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::net::{Ipv4Addr, Ipv6Addr};
+    /// use ipnetx::prefix::IpPrefix;
+    ///
+    /// // IPv4
+    /// let p: IpPrefix<Ipv4Addr> = "192.168.1.0/24".parse().unwrap();
+    /// assert_eq!(p.ip(),   Ipv4Addr::new(192, 168, 1, 0));
+    /// assert_eq!(p.mask(), 24);
+    /// assert_eq!(p.to_string(), "192.168.1.0/24");
+    ///
+    /// // IPv6
+    /// let p6: IpPrefix<Ipv6Addr> = "2001:db8::/32".parse().unwrap();
+    /// assert_eq!(p6.mask(), 32);
+    ///
+    /// // Errors
+    /// assert!("192.168.1.0".parse::<IpPrefix<Ipv4Addr>>().is_err());   // no slash
+    /// assert!("999.0.0.0/24".parse::<IpPrefix<Ipv4Addr>>().is_err());  // bad address
+    /// assert!("192.168.1.0/33".parse::<IpPrefix<Ipv4Addr>>().is_err()); // mask > 32
+    /// ```
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (addr_str, mask_str) = s
+            .split_once('/')
+            .ok_or(ParsePrefixError::MissingSeparator)?;
+        let ip = A::parse_addr(addr_str).ok_or(ParsePrefixError::InvalidAddress)?;
+        let mask: u8 = mask_str
+            .parse()
+            .map_err(|_| ParsePrefixError::InvalidMask)?;
+        IpPrefix::new(ip, mask).map_err(|_| ParsePrefixError::InvalidMask)
     }
 }
 
@@ -475,5 +556,132 @@ mod tests {
         let a = IpPrefix::new(Ipv6Addr::new(0x2001, 0, 0, 0, 0, 0, 0, 0), 32).unwrap();
         let b = IpPrefix::new(Ipv6Addr::new(0x2002, 0, 0, 0, 0, 0, 0, 0), 32).unwrap();
         assert!(!a.overlaps(&b));
+    }
+
+    // --- FromStr ---
+
+    // cargo test prefix::tests::test_v4_parse_valid
+    #[test]
+    fn test_v4_parse_valid() {
+        let p: IpPrefix<Ipv4Addr> = "192.168.1.0/24".parse().unwrap();
+        assert_eq!(p.ip(), Ipv4Addr::new(192, 168, 1, 0));
+        assert_eq!(p.mask(), 24);
+    }
+
+    // cargo test prefix::tests::test_v4_parse_slash0
+    #[test]
+    fn test_v4_parse_slash0() {
+        let p: IpPrefix<Ipv4Addr> = "0.0.0.0/0".parse().unwrap();
+        assert_eq!(p.ip(), Ipv4Addr::new(0, 0, 0, 0));
+        assert_eq!(p.mask(), 0);
+    }
+
+    // cargo test prefix::tests::test_v4_parse_slash32
+    #[test]
+    fn test_v4_parse_slash32() {
+        let p: IpPrefix<Ipv4Addr> = "10.0.0.1/32".parse().unwrap();
+        assert_eq!(p.ip(), Ipv4Addr::new(10, 0, 0, 1));
+        assert_eq!(p.mask(), 32);
+    }
+
+    // cargo test prefix::tests::test_v4_parse_preserves_host_bits
+    #[test]
+    fn test_v4_parse_preserves_host_bits() {
+        // FromStr (like new()) preserves host bits — use .masked() for canonical form
+        let p: IpPrefix<Ipv4Addr> = "192.168.1.100/24".parse().unwrap();
+        assert_eq!(p.ip(), Ipv4Addr::new(192, 168, 1, 100));
+        assert_eq!(p.mask(), 24);
+    }
+
+    // cargo test prefix::tests::test_v4_parse_round_trip
+    #[test]
+    fn test_v4_parse_round_trip() {
+        let s = "10.0.0.0/8";
+        let p: IpPrefix<Ipv4Addr> = s.parse().unwrap();
+        assert_eq!(p.to_string(), s);
+    }
+
+    // cargo test prefix::tests::test_v4_parse_missing_separator
+    #[test]
+    fn test_v4_parse_missing_separator() {
+        let err = "192.168.1.0".parse::<IpPrefix<Ipv4Addr>>().unwrap_err();
+        assert_eq!(err, ParsePrefixError::MissingSeparator);
+    }
+
+    // cargo test prefix::tests::test_v4_parse_invalid_address
+    #[test]
+    fn test_v4_parse_invalid_address() {
+        let err = "999.168.1.0/24".parse::<IpPrefix<Ipv4Addr>>().unwrap_err();
+        assert_eq!(err, ParsePrefixError::InvalidAddress);
+    }
+
+    // cargo test prefix::tests::test_v4_parse_mask_not_a_number
+    #[test]
+    fn test_v4_parse_mask_not_a_number() {
+        let err = "192.168.1.0/abc".parse::<IpPrefix<Ipv4Addr>>().unwrap_err();
+        assert_eq!(err, ParsePrefixError::InvalidMask);
+    }
+
+    // cargo test prefix::tests::test_v4_parse_mask_out_of_range
+    #[test]
+    fn test_v4_parse_mask_out_of_range() {
+        // mask > 32 is rejected even though 33 parses as u8 fine
+        let err = "192.168.1.0/33".parse::<IpPrefix<Ipv4Addr>>().unwrap_err();
+        assert_eq!(err, ParsePrefixError::InvalidMask);
+    }
+
+    // cargo test prefix::tests::test_v4_parse_error_display
+    #[test]
+    fn test_v4_parse_error_display() {
+        assert_eq!(ParsePrefixError::MissingSeparator.to_string(), "missing '/' separator");
+        assert_eq!(ParsePrefixError::InvalidAddress.to_string(), "invalid IP address");
+        assert_eq!(ParsePrefixError::InvalidMask.to_string(), "invalid prefix length");
+    }
+
+    // cargo test prefix::tests::test_v6_parse_valid
+    #[test]
+    fn test_v6_parse_valid() {
+        let p: IpPrefix<Ipv6Addr> = "2001:db8::/32".parse().unwrap();
+        assert_eq!(p.ip(), Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0));
+        assert_eq!(p.mask(), 32);
+    }
+
+    // cargo test prefix::tests::test_v6_parse_slash128
+    #[test]
+    fn test_v6_parse_slash128() {
+        let p: IpPrefix<Ipv6Addr> = "::1/128".parse().unwrap();
+        assert_eq!(p.ip(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
+        assert_eq!(p.mask(), 128);
+    }
+
+    // cargo test prefix::tests::test_v6_parse_slash0
+    #[test]
+    fn test_v6_parse_slash0() {
+        let p: IpPrefix<Ipv6Addr> = "::/0".parse().unwrap();
+        assert_eq!(p.ip(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(p.mask(), 0);
+    }
+
+    // cargo test prefix::tests::test_v6_parse_round_trip
+    #[test]
+    fn test_v6_parse_round_trip() {
+        let s = "2001:db8::/32";
+        let p: IpPrefix<Ipv6Addr> = s.parse().unwrap();
+        assert_eq!(p.to_string(), s);
+    }
+
+    // cargo test prefix::tests::test_v6_parse_mask_out_of_range
+    #[test]
+    fn test_v6_parse_mask_out_of_range() {
+        let err = "::/129".parse::<IpPrefix<Ipv6Addr>>().unwrap_err();
+        assert_eq!(err, ParsePrefixError::InvalidMask);
+    }
+
+    // cargo test prefix::tests::test_v6_parse_rejects_v4_address
+    #[test]
+    fn test_v6_parse_rejects_v4_address() {
+        // IPv4 notation is not valid for IpPrefix<Ipv6Addr>
+        let err = "192.168.1.0/24".parse::<IpPrefix<Ipv6Addr>>().unwrap_err();
+        assert_eq!(err, ParsePrefixError::InvalidAddress);
     }
 }
