@@ -122,21 +122,6 @@ impl<A: IpAddress> IpSetBuilder<A> {
         IpSet::new(merged)
     }
 
-    pub fn union(&self, other: &IpSet<A>) -> IpSet<A> {
-        todo!()
-    }
-
-    pub fn intersection(&self, other: &IpSet<A>) -> IpSet<A> {
-        todo!()
-    }
-
-    pub fn difference(&self, other: &IpSet<A>) -> IpSet<A> {
-        todo!()
-    }
-
-    pub fn complement(&self) -> IpSet<A> {
-        todo!()
-    }
 }
 
 /// An immutable, normalized set of IP addresses.
@@ -285,6 +270,122 @@ impl<A: IpAddress> IpSet<A> {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.ranges.is_empty()
+    }
+
+    /// Returns a new set containing every address that is in `self`, `other`,
+    /// or both (A ∪ B).
+    ///
+    /// The result is normalized: ranges from both sets are merged and sorted,
+    /// so adjacent or overlapping spans are collapsed automatically.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::net::Ipv4Addr;
+    /// use ipnetx::prefix::IpPrefix;
+    /// use ipnetx::ipset::IpSetBuilder;
+    ///
+    /// let mut b1 = IpSetBuilder::<Ipv4Addr>::new();
+    /// b1.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 24).unwrap());
+    /// let a = b1.build();
+    ///
+    /// let mut b2 = IpSetBuilder::<Ipv4Addr>::new();
+    /// b2.add_prefix(IpPrefix::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap());
+    /// let b = b2.build();
+    ///
+    /// let u = a.union(&b);
+    /// assert!(u.contains_ip(Ipv4Addr::new(10, 0, 0, 1)));      // from a
+    /// assert!(u.contains_ip(Ipv4Addr::new(192, 168, 1, 1)));   // from b
+    /// assert_eq!(u.len(), 2);                                    // disjoint — two ranges
+    /// ```
+    #[must_use]
+    pub fn union(&self, other: &IpSet<A>) -> IpSet<A> {
+        // Collect all ranges from both sets into one Vec, then normalize.
+        // normalize sorts and merges adjacent/overlapping spans, so the result
+        // satisfies the IpSet invariant regardless of input order.
+        let mut ranges = Vec::with_capacity(self.ranges.len() + other.ranges.len());
+        ranges.extend_from_slice(&self.ranges);
+        ranges.extend_from_slice(&other.ranges);
+        IpSet::new(normalize(ranges))
+    }
+
+    /// Returns a new set containing every address that is in `self` but not in
+    /// `other` (A ∖ B).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::net::Ipv4Addr;
+    /// use ipnetx::prefix::IpPrefix;
+    /// use ipnetx::ipset::IpSetBuilder;
+    ///
+    /// let mut b1 = IpSetBuilder::<Ipv4Addr>::new();
+    /// b1.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap());
+    /// let a = b1.build();
+    ///
+    /// let mut b2 = IpSetBuilder::<Ipv4Addr>::new();
+    /// b2.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 24).unwrap());
+    /// let b = b2.build();
+    ///
+    /// let diff = a.difference(&b);
+    /// assert!(!diff.contains_ip(Ipv4Addr::new(10, 0, 0, 1))); // carved out
+    /// assert!(diff.contains_ip(Ipv4Addr::new(10, 0, 1, 1)));  // still present
+    /// ```
+    #[must_use]
+    pub fn difference(&self, other: &IpSet<A>) -> IpSet<A> {
+        todo!()
+    }
+
+    /// Returns a new set containing every address that is in both `self` and
+    /// `other` (A ∩ B).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::net::Ipv4Addr;
+    /// use ipnetx::prefix::IpPrefix;
+    /// use ipnetx::ipset::IpSetBuilder;
+    ///
+    /// let mut b1 = IpSetBuilder::<Ipv4Addr>::new();
+    /// b1.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap());
+    /// let a = b1.build();
+    ///
+    /// let mut b2 = IpSetBuilder::<Ipv4Addr>::new();
+    /// b2.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 24).unwrap());
+    /// let b = b2.build();
+    ///
+    /// let inter = a.intersection(&b);
+    /// assert!(inter.contains_ip(Ipv4Addr::new(10, 0, 0, 1)));  // in both
+    /// assert!(!inter.contains_ip(Ipv4Addr::new(10, 0, 1, 1))); // only in a
+    /// ```
+    #[must_use]
+    pub fn intersection(&self, other: &IpSet<A>) -> IpSet<A> {
+        todo!()
+    }
+
+    /// Returns a new set containing every address that is *not* in `self`.
+    ///
+    /// For IPv4 the complement covers `0.0.0.0/0` minus `self`; for IPv6 it
+    /// covers `::/0` minus `self`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::net::Ipv4Addr;
+    /// use ipnetx::prefix::IpPrefix;
+    /// use ipnetx::ipset::IpSetBuilder;
+    ///
+    /// let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+    /// builder.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap());
+    /// let a = builder.build();
+    ///
+    /// let c = a.complement();
+    /// assert!(!c.contains_ip(Ipv4Addr::new(10, 0, 0, 1)));     // was in a
+    /// assert!(c.contains_ip(Ipv4Addr::new(192, 168, 1, 1)));    // not in a
+    /// ```
+    #[must_use]
+    pub fn complement(&self) -> IpSet<A> {
+        todo!()
     }
 }
 
@@ -1238,5 +1339,129 @@ mod tests {
 
         let ipset = builder.build();
         assert!(!ipset.contains_ip(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 11)));
+    }
+
+    // --- Union ---
+
+    fn make_v4_set(start: Ipv4Addr, end: Ipv4Addr) -> super::IpSet<Ipv4Addr> {
+        let mut b = IpSetBuilder::new();
+        b.add_range(IpRange::new(start, end));
+        b.build()
+    }
+
+    fn make_v6_set(start: Ipv6Addr, end: Ipv6Addr) -> super::IpSet<Ipv6Addr> {
+        let mut b = IpSetBuilder::new();
+        b.add_range(IpRange::new(start, end));
+        b.build()
+    }
+
+    // cargo test ipset::tests::test_v4_union_disjoint
+    #[test]
+    fn test_v4_union_disjoint() {
+        // Two completely separate ranges — result contains both, no merging
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        let b = make_v4_set(Ipv4Addr::new(192, 168, 1, 0), Ipv4Addr::new(192, 168, 1, 255));
+        let u = a.union(&b);
+        assert_eq!(u.len(), 2);
+        assert!(u.contains_ip(Ipv4Addr::new(10, 0, 0, 1)));
+        assert!(u.contains_ip(Ipv4Addr::new(192, 168, 1, 1)));
+        assert!(!u.contains_ip(Ipv4Addr::new(172, 16, 0, 1)));
+    }
+
+    // cargo test ipset::tests::test_v4_union_overlapping
+    #[test]
+    fn test_v4_union_overlapping() {
+        // Overlapping ranges — merged into one
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 10));
+        let b = make_v4_set(Ipv4Addr::new(10, 0, 0, 5), Ipv4Addr::new(10, 0, 0, 20));
+        let u = a.union(&b);
+        assert_eq!(u.len(), 1);
+        assert_eq!(u.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 0));
+        assert_eq!(u.ranges()[0].end(), Ipv4Addr::new(10, 0, 0, 20));
+    }
+
+    // cargo test ipset::tests::test_v4_union_adjacent
+    #[test]
+    fn test_v4_union_adjacent() {
+        // Adjacent ranges (no gap) — merged into one
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 127));
+        let b = make_v4_set(Ipv4Addr::new(10, 0, 0, 128), Ipv4Addr::new(10, 0, 0, 255));
+        let u = a.union(&b);
+        assert_eq!(u.len(), 1);
+        assert_eq!(u.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 0));
+        assert_eq!(u.ranges()[0].end(), Ipv4Addr::new(10, 0, 0, 255));
+    }
+
+    // cargo test ipset::tests::test_v4_union_subset
+    #[test]
+    fn test_v4_union_subset() {
+        // b is entirely inside a — result equals a
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        let b = make_v4_set(Ipv4Addr::new(10, 0, 0, 50), Ipv4Addr::new(10, 0, 0, 100));
+        let u = a.union(&b);
+        assert_eq!(u.len(), 1);
+        assert_eq!(u.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 0));
+        assert_eq!(u.ranges()[0].end(), Ipv4Addr::new(10, 0, 0, 255));
+    }
+
+    // cargo test ipset::tests::test_v4_union_with_empty
+    #[test]
+    fn test_v4_union_with_empty() {
+        // Union with empty set — result equals the non-empty set
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        let empty = IpSetBuilder::<Ipv4Addr>::new().build();
+        assert_eq!(a.union(&empty), a);
+        assert_eq!(empty.union(&a), a);
+    }
+
+    // cargo test ipset::tests::test_v4_union_both_empty
+    #[test]
+    fn test_v4_union_both_empty() {
+        let a = IpSetBuilder::<Ipv4Addr>::new().build();
+        let b = IpSetBuilder::<Ipv4Addr>::new().build();
+        assert!(a.union(&b).is_empty());
+    }
+
+    // cargo test ipset::tests::test_v4_union_symmetric
+    #[test]
+    fn test_v4_union_symmetric() {
+        // a ∪ b == b ∪ a
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        let b = make_v4_set(Ipv4Addr::new(192, 168, 1, 0), Ipv4Addr::new(192, 168, 1, 255));
+        assert_eq!(a.union(&b), b.union(&a));
+    }
+
+    // cargo test ipset::tests::test_v6_union_disjoint
+    #[test]
+    fn test_v6_union_disjoint() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0xff),
+        );
+        let b = make_v6_set(
+            Ipv6Addr::new(0x2001, 0xdb9, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0x2001, 0xdb9, 0, 0, 0, 0, 0, 0xff),
+        );
+        let u = a.union(&b);
+        assert_eq!(u.len(), 2);
+        assert!(u.contains_ip(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)));
+        assert!(u.contains_ip(Ipv6Addr::new(0x2001, 0xdb9, 0, 0, 0, 0, 0, 1)));
+    }
+
+    // cargo test ipset::tests::test_v6_union_overlapping
+    #[test]
+    fn test_v6_union_overlapping() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        );
+        let b = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 5),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        );
+        let u = a.union(&b);
+        assert_eq!(u.len(), 1);
+        assert_eq!(u.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(u.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20));
     }
 }
