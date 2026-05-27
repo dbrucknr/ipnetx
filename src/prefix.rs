@@ -64,6 +64,16 @@ impl<A: IpAddress> IpPrefix<A> {
         self.mask == A::BITS
     }
 
+    /// Returns `true` if this prefix shares at least one address with `other`.
+    ///
+    /// Two CIDR prefixes either nest (one contains the other) or are disjoint —
+    /// partial overlap as seen with arbitrary ranges is not possible. This method
+    /// delegates to [`IpRange::overlaps`] via [`to_range`], so the host bits of
+    /// each prefix's IP are automatically masked out before comparison.
+    pub fn overlaps(&self, other: &IpPrefix<A>) -> bool {
+        self.to_range().overlaps(&other.to_range())
+    }
+
     // ── helpers ────────────────────────────────────────────────────────────
 
     /// Bit mask covering the network portion (top `mask` bits within the
@@ -337,5 +347,72 @@ mod tests {
         let prefix =
             IpPrefix::new(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0), 64).unwrap();
         assert!(!prefix.is_single_ip());
+    }
+
+    // --- overlaps() ---
+
+    // cargo test prefix::tests::test_v4_overlaps_same_prefix
+    #[test]
+    fn test_v4_overlaps_same_prefix() {
+        // A prefix always overlaps itself
+        let p = IpPrefix::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap();
+        assert!(p.overlaps(&p));
+    }
+
+    // cargo test prefix::tests::test_v4_overlaps_sub_prefix
+    #[test]
+    fn test_v4_overlaps_sub_prefix() {
+        // 192.168.1.0/24 contains 192.168.1.0/25 — they overlap
+        let parent = IpPrefix::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap();
+        let child = IpPrefix::new(Ipv4Addr::new(192, 168, 1, 0), 25).unwrap();
+        assert!(parent.overlaps(&child));
+        assert!(child.overlaps(&parent)); // symmetric
+    }
+
+    // cargo test prefix::tests::test_v4_overlaps_disjoint
+    #[test]
+    fn test_v4_overlaps_disjoint() {
+        // 10.0.0.0/8 and 192.168.0.0/16 share no addresses
+        let a = IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap();
+        let b = IpPrefix::new(Ipv4Addr::new(192, 168, 0, 0), 16).unwrap();
+        assert!(!a.overlaps(&b));
+        assert!(!b.overlaps(&a)); // symmetric
+    }
+
+    // cargo test prefix::tests::test_v4_overlaps_adjacent
+    #[test]
+    fn test_v4_overlaps_adjacent() {
+        // 192.168.1.0/25 (0–127) and 192.168.1.128/25 (128–255) — adjacent, not overlapping
+        let lo = IpPrefix::new(Ipv4Addr::new(192, 168, 1, 0), 25).unwrap();
+        let hi = IpPrefix::new(Ipv4Addr::new(192, 168, 1, 128), 25).unwrap();
+        assert!(!lo.overlaps(&hi));
+    }
+
+    // cargo test prefix::tests::test_v4_overlaps_unmasked_ip
+    #[test]
+    fn test_v4_overlaps_unmasked_ip() {
+        // Host bits in the IP are masked out before comparison:
+        // 192.168.1.100/24 is treated as 192.168.1.0/24 and overlaps 192.168.1.0/25
+        let p1 = IpPrefix::new(Ipv4Addr::new(192, 168, 1, 100), 24).unwrap();
+        let p2 = IpPrefix::new(Ipv4Addr::new(192, 168, 1, 0), 25).unwrap();
+        assert!(p1.overlaps(&p2));
+    }
+
+    // cargo test prefix::tests::test_v6_overlaps_sub_prefix
+    #[test]
+    fn test_v6_overlaps_sub_prefix() {
+        // 2001:db8::/32 contains 2001:db8::/64
+        let parent = IpPrefix::new(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0), 32).unwrap();
+        let child = IpPrefix::new(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0), 64).unwrap();
+        assert!(parent.overlaps(&child));
+        assert!(child.overlaps(&parent)); // symmetric
+    }
+
+    // cargo test prefix::tests::test_v6_overlaps_disjoint
+    #[test]
+    fn test_v6_overlaps_disjoint() {
+        let a = IpPrefix::new(Ipv6Addr::new(0x2001, 0, 0, 0, 0, 0, 0, 0), 32).unwrap();
+        let b = IpPrefix::new(Ipv6Addr::new(0x2002, 0, 0, 0, 0, 0, 0, 0), 32).unwrap();
+        assert!(!a.overlaps(&b));
     }
 }
