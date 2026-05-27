@@ -39,7 +39,7 @@
 |---|---|---|
 | `AddRange(r)` | ✅ `add_range(r)` | |
 | `AddPrefix(p)` | ✅ `add_prefix(p)` | |
-| `Add(ip)` | ❌ | Convenience — equivalent to `add_range` with `start == end` |
+| `Add(ip)` | ✅ `add_ip(ip)` | Convenience — equivalent to `add_range` with `start == end` |
 | `RemoveRange(r)` | ✅ | Requires splitting stored ranges — see note below |
 | `RemovePrefix(p)` | ✅ | Convert to range, then `remove_range` |
 | `Remove(ip)` | ✅ | Single-address removal — special case of `remove_range` |
@@ -72,9 +72,9 @@
 
 - Add `description`, `license`, `repository`, `keywords`, `categories`, `readme` to `Cargo.toml` (Done)
 - Add a `LICENSE` file (Done)
-- Rewrite `README.md` as user-facing documentation with a usage example
-- Add `///` doc comments to all public items (`cargo doc --open` to preview)
-- Add `#[must_use]` to all predicate methods (`contains_ip`, `contains_range`, `is_valid`, `is_empty`, `overlaps`, etc.)
-- Implement `Default` for `IpSetBuilder` (Clippy will warn otherwise)
-- Run `cargo clippy -- -D warnings` and resolve all findings
+- ~~Rewrite `README.md` as user-facing documentation with a usage example~~ ✅
+- ~~Add `///` doc comments to all public items (`cargo doc --open` to preview)~~ ✅
+- ~~Add `#[must_use]` to all predicate methods (`contains_ip`, `contains_range`, `is_valid`, `is_empty`, `overlaps`, etc.)~~ ✅
+- ~~Implement `Default` for `IpSetBuilder` (Clippy will warn otherwise)~~ ✅
+- ~~Run `cargo clippy -- -D warnings` and resolve all findings~~ ✅
 - Run `cargo publish --dry-run` to catch any remaining crates.io rejections
