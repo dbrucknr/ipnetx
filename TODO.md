@@ -63,8 +63,41 @@
 ## Beyond netipx — ergonomics for Rust
 
 - **`FromStr` / parsing** — `"192.168.1.0/24".parse::<IpPrefix<Ipv4Addr>>()` and
-  `"10.0.0.1-10.0.0.255".parse::<IpRange<Ipv4Addr>>()`. Biggest ergonomics gap for real-world use.
+  `"10.0.0.1-10.0.0.255".parse::<IpRange<Ipv4Addr>>()`. Biggest ergonomics gap for real-world use. ✅
 - **Serde support** — gate behind a `serde` feature flag; standard practice for Rust networking crates.
+
+---
+
+## Positioning — what makes ipnetx distinct from `ipnet`
+
+The core differentiator is `IpSet` as a **proper mathematical set type**. No mainstream Rust IP crate
+implements set algebra. With these operations, `ipnetx` becomes the go-to for firewall tooling, BGP
+route analysis, threat intelligence ingestion, and network auditing.
+
+### Tier 1 — set algebra (biggest gap in the ecosystem)
+
+| Operation | Status | Example use case |
+|---|---|---|
+| `a.union(&b) -> IpSet` | ✅ | Merge two ACLs into one |
+| `a.intersection(&b) -> IpSet` | ✅ | "Which IPs are in both our network and this threat feed?" |
+| `a.difference(&b) -> IpSet` | ✅ | "Everything in the allow-list that isn't also in the block-list" |
+| `a.complement() -> IpSet` | ✅ | "Every IP *not* covered by this set" — deny-by-default rules |
+
+### Tier 2 — useful additions
+
+| Feature | Status | Notes |
+|---|---|---|
+| `IpSet::count() -> u128` | ✅ | Total address cardinality, not just number of stored ranges |
+| `IpSet::is_subset_of(&other)` | ✅ | Expressible via intersection but worth a named method |
+| `IpSet::is_superset_of(&other)` | ✅ | Symmetric counterpart to `is_subset_of` |
+| `FromIterator<IpPrefix<A>>` for `IpSetBuilder` | ✅ | `prefixes.into_iter().collect::<IpSetBuilder<_>>()` |
+| `FromIterator<IpRange<A>>` for `IpSetBuilder` | ✅ | Same ergonomics for ranges |
+
+### Tier 3 — table stakes
+
+| Feature | Status | Notes |
+|---|---|---|
+| Serde support | ❌ | Gate behind a `serde` feature flag; expected by anyone using JSON/TOML config |
 
 ---
 

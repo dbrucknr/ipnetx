@@ -9,7 +9,7 @@ IP address range, prefix, and set operations for IPv4 and IPv6.
 
 ---
 
-## What is this?
+## What is ipnetx?
 
 Working with IP addresses in network programming often means more than checking
 whether two addresses are equal. Real questions look like:
@@ -37,6 +37,28 @@ for both IPv4 and IPv6, using the address types already in `std::net`:
 
 ---
 
+## Why ipnetx?
+
+The Rust ecosystem already has solid building blocks for IP address work:
+
+- **`std::net`** gives you `Ipv4Addr` and `Ipv6Addr` — address types and nothing else.
+- **`ipnet`** adds CIDR prefix and subnet handling and is the right choice if that is all you need.
+
+`ipnetx` picks up where those leave off. The gap it fills is **`IpSet` as a proper mathematical set type** — something no mainstream Rust IP crate implements today. When your problem is not just "does this IP belong to this prefix?" but instead involves combining, subtracting, or inverting collections of addresses, you need set algebra:
+
+| Question | Operation |
+|---|---|
+| Merge two ACLs without duplicating rules | `union` |
+| Which IPs appear in both our network and this threat feed? | `intersection` |
+| Everything in the allow-list that isn't also in the block-list | `difference` |
+| Every IP *not* covered by this ruleset — for deny-by-default logic | `complement` |
+
+These are the kinds of questions that come up in firewall tooling, BGP route analysis, threat intelligence ingestion, and network auditing. Without set algebra you end up writing nested loops and hoping the edge cases are right. `ipnetx` gives you correct, tested, O(m + n) implementations out of the box.
+
+If you only need to check whether an address or prefix falls inside a CIDR block, `ipnet` is a perfectly fine choice and you may not need this crate. If you need to *combine or compare collections of addresses*, `ipnetx` is built for that.
+
+---
+
 ## Installation
 
 Add this to your `Cargo.toml`:
@@ -47,6 +69,15 @@ ipnetx = "0.1"
 ```
 
 Or: `cargo add ipnetx`
+
+> **A note on error handling in examples**
+>
+> All code snippets below use `.unwrap()` for brevity. In production code,
+> handle errors explicitly — propagate with `?`, match on `Result`/`Option`,
+> or use a crate like [`anyhow`](https://docs.rs/anyhow) for ergonomic error
+> context. The only fallible constructors in this crate are `IpPrefix::new`
+> (rejects out-of-range masks) and `.parse()` on `IpPrefix`/`IpRange`
+> (rejects malformed strings); the set operations themselves are infallible.
 
 ---
 
@@ -508,6 +539,162 @@ let set = builder.build();
 
 assert!(set.contains_ip(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1)));
 assert!(!set.contains_ip(Ipv6Addr::new(0x2001, 0x0db9, 0, 0, 0, 0, 0, 0)));
+```
+
+### Set algebra
+
+`IpSet` supports four mathematical set operations. All four return a new,
+normalized `IpSet` and are infallible — no `unwrap` required on the result.
+
+**Union** — every address in either set:
+
+```rust
+use std::net::Ipv4Addr;
+use ipnetx::prefix::IpPrefix;
+use ipnetx::ipset::IpSetBuilder;
+
+let mut b1 = IpSetBuilder::<Ipv4Addr>::new();
+b1.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 24).unwrap());
+let a = b1.build();
+
+let mut b2 = IpSetBuilder::<Ipv4Addr>::new();
+b2.add_prefix(IpPrefix::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap());
+let b = b2.build();
+
+let u = a.union(&b);
+assert!(u.contains_ip(Ipv4Addr::new(10, 0, 0, 1)));       // from a
+assert!(u.contains_ip(Ipv4Addr::new(192, 168, 1, 1)));    // from b
+assert_eq!(u.len(), 2);                                    // two disjoint ranges
+```
+
+**Intersection** — only addresses present in both sets:
+
+```rust
+use std::net::Ipv4Addr;
+use ipnetx::prefix::IpPrefix;
+use ipnetx::ipset::IpSetBuilder;
+
+let mut b1 = IpSetBuilder::<Ipv4Addr>::new();
+b1.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap());
+let a = b1.build(); // 10.0.0.0 – 10.255.255.255
+
+let mut b2 = IpSetBuilder::<Ipv4Addr>::new();
+b2.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 24).unwrap());
+let b = b2.build(); // 10.0.0.0 – 10.0.0.255
+
+let inter = a.intersection(&b);
+assert!(inter.contains_ip(Ipv4Addr::new(10, 0, 0, 1)));   // in both
+assert!(!inter.contains_ip(Ipv4Addr::new(10, 0, 1, 1)));  // only in a
+```
+
+**Difference** — addresses in `a` but not in `b`:
+
+```rust
+use std::net::Ipv4Addr;
+use ipnetx::prefix::IpPrefix;
+use ipnetx::ipset::IpSetBuilder;
+
+let mut b1 = IpSetBuilder::<Ipv4Addr>::new();
+b1.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap());
+let a = b1.build();
+
+let mut b2 = IpSetBuilder::<Ipv4Addr>::new();
+b2.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 24).unwrap());
+let b = b2.build();
+
+let diff = a.difference(&b);
+assert!(!diff.contains_ip(Ipv4Addr::new(10, 0, 0, 1))); // carved out by b
+assert!(diff.contains_ip(Ipv4Addr::new(10, 0, 1, 1)));  // still in a
+```
+
+**Complement** — every address *not* in the set. For IPv4 this covers the
+entire `0.0.0.0/0` space minus `self`; for IPv6 it covers `::/0` minus `self`.
+
+```rust
+use std::net::Ipv4Addr;
+use ipnetx::prefix::IpPrefix;
+use ipnetx::ipset::IpSetBuilder;
+
+let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+builder.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap());
+let a = builder.build();
+
+let c = a.complement();
+assert!(!c.contains_ip(Ipv4Addr::new(10, 0, 0, 1)));    // was in a
+assert!(c.contains_ip(Ipv4Addr::new(192, 168, 1, 1)));  // not in a
+
+// a and its complement are disjoint and together cover the whole space
+assert!(a.intersection(&c).is_empty());
+assert_eq!(a.union(&c).len(), 1); // merges into 0.0.0.0/0
+```
+
+### Cardinality and subset tests
+
+**`count()`** returns the total number of individual IP addresses in the set
+as a `u128` (large enough to represent an entire IPv6 address space exactly):
+
+```rust
+use std::net::Ipv4Addr;
+use ipnetx::ipset::IpSetBuilder;
+use ipnetx::range::IpRange;
+
+let mut b = IpSetBuilder::<Ipv4Addr>::new();
+b.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 9)));   // 10
+b.add_range(IpRange::new(Ipv4Addr::new(192, 168, 1, 0), Ipv4Addr::new(192, 168, 1, 4))); // 5
+let set = b.build();
+
+assert_eq!(set.count(), 15);
+assert_eq!(set.len(), 2);  // two ranges, but 15 addresses total
+```
+
+**`is_subset_of`** and **`is_superset_of`** — test containment between sets.
+An empty set is a subset of every set:
+
+```rust
+use std::net::Ipv4Addr;
+use ipnetx::ipset::IpSetBuilder;
+use ipnetx::range::IpRange;
+
+let mut ba = IpSetBuilder::<Ipv4Addr>::new();
+ba.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255)));
+let a = ba.build(); // wider range
+
+let mut bb = IpSetBuilder::<Ipv4Addr>::new();
+bb.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 50), Ipv4Addr::new(10, 0, 0, 100)));
+let b = bb.build(); // narrower range, fully inside a
+
+assert!(b.is_subset_of(&a));    // b ⊆ a
+assert!(a.is_superset_of(&b));  // a ⊇ b
+assert!(!a.is_subset_of(&b));   // a is strictly larger
+```
+
+### Collecting from iterators
+
+`IpSetBuilder` implements `FromIterator` for both `IpRange` and `IpPrefix`,
+so you can build a set from any iterator using `.collect()`:
+
+```rust
+use std::net::Ipv4Addr;
+use ipnetx::ipset::IpSetBuilder;
+use ipnetx::prefix::IpPrefix;
+use ipnetx::range::IpRange;
+
+// From a Vec of ranges
+let ranges = vec![
+    IpRange::new(Ipv4Addr::new(10, 0, 0, 0),    Ipv4Addr::new(10, 0, 0, 255)),
+    IpRange::new(Ipv4Addr::new(192, 168, 1, 0), Ipv4Addr::new(192, 168, 1, 255)),
+];
+let set = ranges.into_iter().collect::<IpSetBuilder<Ipv4Addr>>().build();
+assert_eq!(set.len(), 2);
+
+// From a Vec of prefixes — useful when loading CIDR lists from config
+let prefixes = vec![
+    IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap(),
+    IpPrefix::new(Ipv4Addr::new(192, 168, 0, 0), 16).unwrap(),
+];
+let set = prefixes.into_iter().collect::<IpSetBuilder<Ipv4Addr>>().build();
+assert!(set.contains_ip(Ipv4Addr::new(10, 1, 2, 3)));
+assert!(set.contains_ip(Ipv4Addr::new(192, 168, 1, 100)));
 ```
 
 ---
