@@ -43,6 +43,21 @@ impl<A: IpAddress> IpPrefix<A> {
         IpRange::new(A::from_u128(ip & network), A::from_u128(ip | host))
     }
 
+    /// Returns a new prefix with the host bits of the address zeroed.
+    ///
+    /// The prefix length is unchanged; only the IP portion is affected.
+    ///
+    /// # Examples
+    /// - `192.168.1.100/24` → `192.168.1.0/24`
+    /// - `192.168.1.0/24`   → `192.168.1.0/24`  (already masked; no change)
+    /// - `10.0.0.1/32`      → `10.0.0.1/32`     (/32 has no host bits to zero)
+    pub fn masked(&self) -> Self {
+        Self {
+            ip: A::from_u128(self.ip.to_u128() & self.network_mask()),
+            mask: self.mask,
+        }
+    }
+
     // ── helpers ────────────────────────────────────────────────────────────
 
     /// Bit mask covering the network portion (top `mask` bits within the
@@ -53,7 +68,11 @@ impl<A: IpAddress> IpPrefix<A> {
         //   IPv6 → 0xFFFFFFFF_...._FFFFFFFF
         let addr_max: u128 = u128::MAX >> (128 - A::BITS as u32);
         let shift = A::BITS - self.mask;
-        addr_max & (u128::MAX << shift as u32)
+        // shift == 128 for an IPv6 /0 prefix; shifting u128 by its full width
+        // overflows, so checked_shl returns None and we fall back to 0 (correct:
+        // a /0 has no network bits, so the network mask is all zeros).
+        let shifted = u128::MAX.checked_shl(shift as u32).unwrap_or(0);
+        addr_max & shifted
     }
 
     /// Bit mask covering the host portion (bottom `BITS - mask` bits).
@@ -217,5 +236,68 @@ mod tests {
     fn test_ip_v6_prefix_display() {
         let prefix = IpPrefix::<Ipv6Addr>::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0), 120).unwrap();
         assert_eq!(format!("{}", prefix), "::/120");
+    }
+
+    // --- masked() ---
+
+    // cargo test prefix::tests::test_v4_masked_with_host_bits
+    #[test]
+    fn test_v4_masked_with_host_bits() {
+        // 192.168.1.100/24 → 192.168.1.0/24
+        let prefix = IpPrefix::new(Ipv4Addr::new(192, 168, 1, 100), 24).unwrap();
+        let masked = prefix.masked();
+        assert_eq!(masked.ip(), Ipv4Addr::new(192, 168, 1, 0));
+        assert_eq!(masked.mask(), 24);
+    }
+
+    // cargo test prefix::tests::test_v4_masked_already_clean
+    #[test]
+    fn test_v4_masked_already_clean() {
+        // Already network-aligned — masked() is a no-op
+        let prefix = IpPrefix::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap();
+        let masked = prefix.masked();
+        assert_eq!(masked.ip(), Ipv4Addr::new(192, 168, 1, 0));
+        assert_eq!(masked.mask(), 24);
+    }
+
+    // cargo test prefix::tests::test_v4_masked_slash32
+    #[test]
+    fn test_v4_masked_slash32() {
+        // /32 has no host bits — masked() is always a no-op
+        let prefix = IpPrefix::new(Ipv4Addr::new(10, 0, 0, 1), 32).unwrap();
+        let masked = prefix.masked();
+        assert_eq!(masked.ip(), Ipv4Addr::new(10, 0, 0, 1));
+        assert_eq!(masked.mask(), 32);
+    }
+
+    // cargo test prefix::tests::test_v4_masked_slash0
+    #[test]
+    fn test_v4_masked_slash0() {
+        // /0 — all bits are host bits, so any IP collapses to 0.0.0.0
+        let prefix = IpPrefix::new(Ipv4Addr::new(10, 20, 30, 40), 0).unwrap();
+        let masked = prefix.masked();
+        assert_eq!(masked.ip(), Ipv4Addr::new(0, 0, 0, 0));
+        assert_eq!(masked.mask(), 0);
+    }
+
+    // cargo test prefix::tests::test_v6_masked_with_host_bits
+    #[test]
+    fn test_v6_masked_with_host_bits() {
+        // 2001:db8::ff/120 → 2001:db8::/120
+        let prefix =
+            IpPrefix::new(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0xff), 120).unwrap();
+        let masked = prefix.masked();
+        assert_eq!(masked.ip(), Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0));
+        assert_eq!(masked.mask(), 120);
+    }
+
+    // cargo test prefix::tests::test_v6_masked_slash0
+    #[test]
+    fn test_v6_masked_slash0() {
+        // /0 — any IPv6 address collapses to ::
+        let prefix = IpPrefix::new(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1), 0).unwrap();
+        let masked = prefix.masked();
+        assert_eq!(masked.ip(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(masked.mask(), 0);
     }
 }
