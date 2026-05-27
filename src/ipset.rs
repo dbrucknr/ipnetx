@@ -9,15 +9,65 @@ impl<A: IpAddress> IpSetBuilder<A> {
         Self { ranges: Vec::new() }
     }
 
+    pub fn add_ip(&mut self, ip: A) {
+        // A single IP is nothing more than a range where start == end — a range of size 1
+        let range = IpRange::new(ip, ip);
+        self.add_range(range);
+    }
+
+    pub fn remove_ip(&mut self, ip: A) {
+        let range = IpRange::new(ip, ip);
+        self.remove_range(range);
+    }
+
     pub fn add_range(&mut self, range: IpRange<A>) {
         if range.is_valid() {
             self.ranges.push(range);
         }
     }
 
+    pub fn remove_range(&mut self, range: IpRange<A>) {
+        // O(n) time complexity
+        if !range.is_valid() {
+            return;
+        }
+
+        let start = range.start().to_u128();
+        let end = range.end().to_u128();
+
+        let mut result = Vec::new();
+
+        for stored in self.ranges.drain(..) {
+            let s = stored.start().to_u128();
+            let e = stored.end().to_u128();
+
+            if e < start || s > end {
+                // No overlap - keep
+                result.push(stored);
+            } else {
+                // Left piece stays if the stored range starts before the removal
+                if s < start {
+                    result.push(IpRange::new(stored.start(), A::from_u128(start - 1)));
+                }
+                // Right piece stays if the stored range ends after the removal
+                if e > end {
+                    result.push(IpRange::new(A::from_u128(end + 1), stored.end()));
+                }
+                // If neither condition was true, the stored range was fully covered. It is dropped.
+            }
+        }
+
+        self.ranges = result;
+    }
+
     pub fn add_prefix(&mut self, prefix: IpPrefix<A>) {
         let range = prefix.to_range();
         self.add_range(range);
+    }
+
+    pub fn remove_prefix(&mut self, prefix: IpPrefix<A>) {
+        let range = prefix.to_range();
+        self.remove_range(range);
     }
 
     pub fn build(mut self) -> IpSet<A> {
@@ -275,6 +325,198 @@ mod tests {
             ipset.ranges()[1].end(),
             Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20)
         );
+    }
+
+    // --- Add Ip ---
+    // cargo test ipset::tests::test_add_ip
+    #[test]
+    fn test_add_ip() {
+        let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+        builder.add_ip(Ipv4Addr::new(192, 168, 1, 1));
+
+        let ipset = builder.build();
+
+        assert!(!ipset.is_empty());
+        assert_eq!(ipset.len(), 1);
+        assert_eq!(ipset.ranges()[0].start(), Ipv4Addr::new(192, 168, 1, 1));
+        assert_eq!(ipset.ranges()[0].end(), Ipv4Addr::new(192, 168, 1, 1));
+    }
+
+    // --- Remove IP ---
+    // cargo test ipset::tests::test_remove_ip
+    #[test]
+    fn test_remove_ip() {
+        let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+        builder.add_ip(Ipv4Addr::new(192, 168, 1, 1));
+        builder.remove_ip(Ipv4Addr::new(192, 168, 1, 1));
+        let ipset = builder.build();
+
+        assert!(ipset.is_empty());
+        assert_eq!(ipset.len(), 0);
+    }
+
+    // --- Remove IP: split and no-op ---
+    // cargo test ipset::tests::test_remove_ip_splits_range
+    #[test]
+    fn test_remove_ip_splits_range() {
+        // Remove 10.0.0.5 from [10.0.0.1..10.0.0.10] → [1..4] and [6..10]
+        let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 10),
+        ));
+        builder.remove_ip(Ipv4Addr::new(10, 0, 0, 5));
+        let ipset = builder.build();
+        assert_eq!(ipset.len(), 2);
+        assert_eq!(ipset.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 1));
+        assert_eq!(ipset.ranges()[0].end(), Ipv4Addr::new(10, 0, 0, 4));
+        assert_eq!(ipset.ranges()[1].start(), Ipv4Addr::new(10, 0, 0, 6));
+        assert_eq!(ipset.ranges()[1].end(), Ipv4Addr::new(10, 0, 0, 10));
+    }
+
+    // cargo test ipset::tests::test_remove_ip_not_in_set
+    #[test]
+    fn test_remove_ip_not_in_set() {
+        // Removing an IP that isn't in the set is a no-op
+        let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 10),
+        ));
+        builder.remove_ip(Ipv4Addr::new(10, 0, 0, 20));
+        let ipset = builder.build();
+        assert_eq!(ipset.len(), 1);
+    }
+
+    // --- Add IP: merging ---
+    // cargo test ipset::tests::test_add_ip_merges_adjacent
+    #[test]
+    fn test_add_ip_merges_adjacent() {
+        // 10.0.0.11 is adjacent to [10.0.0.1..10.0.0.10] — should merge
+        let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 10),
+        ));
+        builder.add_ip(Ipv4Addr::new(10, 0, 0, 11));
+        let ipset = builder.build();
+        assert_eq!(ipset.len(), 1);
+        assert_eq!(ipset.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 1));
+        assert_eq!(ipset.ranges()[0].end(), Ipv4Addr::new(10, 0, 0, 11));
+    }
+
+    // Note on remove operations: removing from the middle of a stored range requires splitting it into up to two pieces.
+    // Five cases arise per stored range: no overlap (keep), fully covered (drop), clips left end (trim start),
+    // clips right end (trim end), removal in the middle (split into two).
+
+    // --- Remove Range ---
+    // cargo test ipset::tests::test_remove_range
+    #[test]
+    fn test_remove_range() {
+        let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(192, 168, 1, 1),
+            Ipv4Addr::new(192, 168, 1, 255),
+        ));
+        builder.remove_range(IpRange::new(
+            Ipv4Addr::new(192, 168, 1, 1),
+            Ipv4Addr::new(192, 168, 1, 255),
+        ));
+        let ipset = builder.build();
+
+        assert!(ipset.is_empty());
+        assert_eq!(ipset.len(), 0);
+    }
+
+    // cargo test ipset::tests::test_remove_range_no_overlap
+    #[test]
+    fn test_remove_range_no_overlap() {
+        // Removing a range that doesn't touch stored ranges is a no-op
+        let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 10),
+        ));
+        builder.remove_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 20),
+            Ipv4Addr::new(10, 0, 0, 30),
+        ));
+        let ipset = builder.build();
+        assert_eq!(ipset.len(), 1);
+        assert_eq!(ipset.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 1));
+        assert_eq!(ipset.ranges()[0].end(), Ipv4Addr::new(10, 0, 0, 10));
+    }
+
+    // cargo test ipset::tests::test_remove_range_clips_left_of_stored
+    #[test]
+    fn test_remove_range_clips_left_of_stored() {
+        // Remove [1..5] from stored [1..10] → right piece [6..10] survives
+        let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 10),
+        ));
+        builder.remove_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 5),
+        ));
+        let ipset = builder.build();
+        assert_eq!(ipset.len(), 1);
+        assert_eq!(ipset.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 6));
+        assert_eq!(ipset.ranges()[0].end(), Ipv4Addr::new(10, 0, 0, 10));
+    }
+
+    // cargo test ipset::tests::test_remove_range_clips_right_of_stored
+    #[test]
+    fn test_remove_range_clips_right_of_stored() {
+        // Remove [6..10] from stored [1..10] → left piece [1..5] survives
+        let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 10),
+        ));
+        builder.remove_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 6),
+            Ipv4Addr::new(10, 0, 0, 10),
+        ));
+        let ipset = builder.build();
+        assert_eq!(ipset.len(), 1);
+        assert_eq!(ipset.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 1));
+        assert_eq!(ipset.ranges()[0].end(), Ipv4Addr::new(10, 0, 0, 5));
+    }
+
+    // cargo test ipset::tests::test_remove_range_middle_split
+    #[test]
+    fn test_remove_range_middle_split() {
+        // Remove [4..7] from stored [1..10] → two pieces: [1..3] and [8..10]
+        let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 10),
+        ));
+        builder.remove_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 4),
+            Ipv4Addr::new(10, 0, 0, 7),
+        ));
+        let ipset = builder.build();
+        assert_eq!(ipset.len(), 2);
+        assert_eq!(ipset.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 1));
+        assert_eq!(ipset.ranges()[0].end(), Ipv4Addr::new(10, 0, 0, 3));
+        assert_eq!(ipset.ranges()[1].start(), Ipv4Addr::new(10, 0, 0, 8));
+        assert_eq!(ipset.ranges()[1].end(), Ipv4Addr::new(10, 0, 0, 10));
+    }
+
+    // --- Remove Prefix
+    // cargo test ipset::tests::test_remove_prefix
+    #[test]
+    fn test_remove_prefix() {
+        let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+        builder.add_prefix(IpPrefix::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap());
+        builder.remove_prefix(IpPrefix::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap());
+        let ipset = builder.build();
+
+        assert!(ipset.is_empty());
+        assert_eq!(ipset.len(), 0);
     }
 
     // --- Builder: edge cases ---
