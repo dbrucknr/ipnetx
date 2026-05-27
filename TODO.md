@@ -19,7 +19,7 @@
 | `IsZero()` | ✅ `is_zero()` | |
 | `Valid()` | ✅ `is_valid()` | |
 | `String()` | ✅ `Display` | |
-| `Prefix() (Prefix, bool)` | ❌ | Returns a single CIDR prefix if the range is exactly CIDR-aligned, `None` otherwise |
+| `Prefix() (Prefix, bool)` | ✅ | Returns a single CIDR prefix if the range is exactly CIDR-aligned, `None` otherwise |
 
 ### `IpPrefix`
 

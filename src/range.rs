@@ -37,6 +37,59 @@ impl<A: IpAddress> IpRange<A> {
         self.is_valid() && other.is_valid() && self.end >= other.start && self.start <= other.end
     }
 
+    /// Returns `Some(prefix)` if this range is exactly one CIDR block, `None` otherwise.
+    ///
+    /// A range qualifies when its size is a power of two *and* the start address
+    /// is aligned to that size (all host bits are zero).
+    ///
+    /// # Examples
+    /// - `192.168.1.0..192.168.1.255` → `Some(192.168.1.0/24)`
+    /// - `192.168.1.1..192.168.1.254` → `None` (size 254 is not a power of two)
+    /// - `192.168.1.1..192.168.1.4`   → `None` (size 4 but start is misaligned)
+    /// - `10.0.0.1..10.0.0.1`         → `Some(10.0.0.1/32)` (single IP)
+    pub fn prefix(&self) -> Option<IpPrefix<A>> {
+        if !self.is_valid() {
+            return None;
+        }
+
+        let start = self.start().to_u128();
+        let end = self.end().to_u128();
+        let bits = A::BITS as u32;
+
+        // size = end − start + 1 (number of addresses).
+        // wrapping_add handles the entire-address-space edge case:
+        // when span == u128::MAX, size wraps to 0, which we treat as 2^128.
+        let span = end - start;
+        let size = span.wrapping_add(1);
+
+        // size must be a power of two (0 represents 2^128, which qualifies).
+        if size != 0 && !size.is_power_of_two() {
+            return None;
+        }
+
+        // h = host bits in the CIDR prefix.
+        let h = if size == 0 {
+            128
+        } else {
+            size.trailing_zeros()
+        };
+        if h > bits {
+            return None; // sanity check - can't exceed the address family width
+        }
+
+        // start must be aligned to the block: its bottom h bits must all be zero.
+        if start.trailing_zeros() < h {
+            return None;
+        }
+
+        let mask = bits as u8 - h as u8;
+        if let Ok(prefix) = IpPrefix::new(A::from_u128(start), mask) {
+            Some(prefix)
+        } else {
+            None
+        }
+    }
+
     pub fn prefixes(&self) -> Vec<IpPrefix<A>> {
         if !self.is_valid() {
             return Vec::new();
@@ -649,6 +702,116 @@ mod tests {
         assert_eq!(prefixes[12].mask(), 127);
         assert_eq!(prefixes[13].ip(), Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 0xfe));
         assert_eq!(prefixes[13].mask(), 128);
+    }
+
+    // --- prefix() ---
+
+    // cargo test range::tests::test_v4_prefix_cidr_aligned
+    #[test]
+    fn test_v4_prefix_cidr_aligned() {
+        // The happy path — power-of-two size + aligned start
+        // 192.168.1.0..192.168.1.255 is exactly 192.168.1.0/24
+        let range = IpRange::new(
+            Ipv4Addr::new(192, 168, 1, 0),
+            Ipv4Addr::new(192, 168, 1, 255),
+        );
+        let p = range.prefix().unwrap();
+        assert_eq!(p.ip(), Ipv4Addr::new(192, 168, 1, 0));
+        assert_eq!(p.mask(), 24);
+    }
+
+    // cargo test range::tests::test_v4_prefix_unaligned_span
+    #[test]
+    fn test_v4_prefix_unaligned_span() {
+        // Rejects non-power-of-two sizes
+        // size 254 is not a power of two → None
+        let range = IpRange::new(
+            Ipv4Addr::new(192, 168, 1, 1),
+            Ipv4Addr::new(192, 168, 1, 254),
+        );
+        assert!(range.prefix().is_none());
+    }
+
+    // cargo test range::tests::test_v4_prefix_misaligned_start
+    #[test]
+    fn test_v4_prefix_misaligned_start() {
+        // Rejects power-of-two size where start has too few trailing zeros
+        // size 4 = 2^2 but .1 has 0 trailing zeros — misaligned
+        let range = IpRange::new(Ipv4Addr::new(192, 168, 1, 1), Ipv4Addr::new(192, 168, 1, 4));
+        assert!(range.prefix().is_none());
+    }
+
+    // cargo test range::tests::test_v4_prefix_single_ip
+    #[test]
+    fn test_v4_prefix_single_ip() {
+        // h=0 edge case — any single IP is its own /32 or /128
+        // A single-IP range is always a /32
+        let range = IpRange::new(Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(10, 0, 0, 1));
+        let p = range.prefix().unwrap();
+        assert_eq!(p.ip(), Ipv4Addr::new(10, 0, 0, 1));
+        assert_eq!(p.mask(), 32);
+    }
+
+    // cargo test range::tests::test_v4_prefix_entire_space
+    #[test]
+    fn test_v4_prefix_entire_space() {
+        // IPv4: size=2^32 fits in u128 normally; IPv6: the wrapping_add=0 edge case
+        // 0.0.0.0/0
+        let range = IpRange::new(Ipv4Addr::new(0, 0, 0, 0), Ipv4Addr::new(255, 255, 255, 255));
+        let p = range.prefix().unwrap();
+        assert_eq!(p.ip(), Ipv4Addr::new(0, 0, 0, 0));
+        assert_eq!(p.mask(), 0);
+    }
+
+    // cargo test range::tests::test_v4_prefix_invalid_range
+    #[test]
+    fn test_v4_prefix_invalid_range() {
+        // Returns None before even checking the math
+        let range = IpRange::new(
+            Ipv4Addr::new(192, 168, 1, 255),
+            Ipv4Addr::new(192, 168, 1, 0),
+        );
+        assert!(range.prefix().is_none());
+    }
+
+    // cargo test range::tests::test_v6_prefix_cidr_aligned
+    #[test]
+    fn test_v6_prefix_cidr_aligned() {
+        // 1::/120 — 256 addresses, start aligned
+        let range = IpRange::new(
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 0x00),
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 0xff),
+        );
+        let p = range.prefix().unwrap();
+        assert_eq!(p.ip(), Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(p.mask(), 120);
+    }
+
+    // cargo test range::tests::test_v6_prefix_entire_space
+    #[test]
+    fn test_v6_prefix_entire_space() {
+        // ::/0
+        let range = IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(
+                0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
+            ),
+        );
+        let p = range.prefix().unwrap();
+        assert_eq!(p.ip(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(p.mask(), 0);
+    }
+
+    // cargo test range::tests::test_v6_prefix_single_ip
+    #[test]
+    fn test_v6_prefix_single_ip() {
+        let range = IpRange::new(
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 1),
+        );
+        let p = range.prefix().unwrap();
+        assert_eq!(p.ip(), Ipv6Addr::new(1, 0, 0, 0, 0, 0, 0, 1));
+        assert_eq!(p.mask(), 128);
     }
 
     // --- Display ---
