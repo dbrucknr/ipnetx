@@ -45,6 +45,8 @@ Add this to your `Cargo.toml`:
 ipnetx = "0.1"
 ```
 
+Or: `cargo add ipnetx`
+
 ---
 
 ## IpRange — working with address spans
@@ -66,6 +68,33 @@ let range = IpRange::new(
 assert!(range.is_valid());
 assert_eq!(range.start(), Ipv4Addr::new(10, 0, 0, 0));
 assert_eq!(range.end(),   Ipv4Addr::new(10, 0, 0, 255));
+```
+
+### Parsing from a string
+
+Use `.parse()` to create an `IpRange` from a string. The separator is `..`
+(two dots) — the same token that `Display` produces, so a round-trip always
+reconstructs the original string. The separator is unambiguous for IPv6 because
+no valid IPv6 address contains consecutive dots.
+
+```rust
+use std::net::{Ipv4Addr, Ipv6Addr};
+use ipnetx::range::IpRange;
+
+// IPv4 — parse, then verify the round-trip
+let r: IpRange<Ipv4Addr> = "10.0.0.0..10.0.0.255".parse().unwrap();
+assert_eq!(r.start(), Ipv4Addr::new(10, 0, 0,   0));
+assert_eq!(r.end(),   Ipv4Addr::new(10, 0, 0, 255));
+assert_eq!(r.to_string(), "10.0.0.0..10.0.0.255");
+
+// IPv6 — works identically
+let r6: IpRange<Ipv6Addr> = "2001:db8::1..2001:db8::ff".parse().unwrap();
+assert!(r6.is_valid());
+
+// Wrong separator → error
+assert!("10.0.0.0-10.0.0.255".parse::<IpRange<Ipv4Addr>>().is_err());
+// Bad address → error
+assert!("999.0.0.0..10.0.0.255".parse::<IpRange<Ipv4Addr>>().is_err());
 ```
 
 ### Containment
@@ -200,6 +229,33 @@ let prefix = IpPrefix::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap();
 
 // Err: mask 33 exceeds 32 bits
 assert!(IpPrefix::new(Ipv4Addr::new(192, 168, 1, 0), 33).is_err());
+```
+
+### Parsing from a string
+
+Use `.parse()` to create an `IpPrefix` from the standard `"<address>/<length>"`
+notation. Host bits in the address are preserved just like `IpPrefix::new` —
+`"192.168.1.100/24"` parses successfully. Use `.masked()` on the result if you
+need the canonical network-address form.
+
+```rust
+use std::net::{Ipv4Addr, Ipv6Addr};
+use ipnetx::prefix::IpPrefix;
+
+// IPv4 — parse, then verify the round-trip
+let p: IpPrefix<Ipv4Addr> = "192.168.1.0/24".parse().unwrap();
+assert_eq!(p.ip(),   Ipv4Addr::new(192, 168, 1, 0));
+assert_eq!(p.mask(), 24);
+assert_eq!(p.to_string(), "192.168.1.0/24");
+
+// IPv6 — works identically
+let p6: IpPrefix<Ipv6Addr> = "2001:db8::/32".parse().unwrap();
+assert_eq!(p6.mask(), 32);
+
+// Missing '/' → error
+assert!("192.168.1.0".parse::<IpPrefix<Ipv4Addr>>().is_err());
+// Mask out of range → error
+assert!("192.168.1.0/33".parse::<IpPrefix<Ipv4Addr>>().is_err());
 ```
 
 ### Containment
