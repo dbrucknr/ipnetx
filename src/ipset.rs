@@ -314,7 +314,7 @@ impl<A: IpAddress> IpSet<A> {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```
     /// use std::net::Ipv4Addr;
     /// use ipnetx::prefix::IpPrefix;
     /// use ipnetx::ipset::IpSetBuilder;
@@ -333,7 +333,15 @@ impl<A: IpAddress> IpSet<A> {
     /// ```
     #[must_use]
     pub fn difference(&self, other: &IpSet<A>) -> IpSet<A> {
-        todo!()
+        // Both sets are already normalized (sorted, non-overlapping).
+        // subtract_range only splits and drops ranges — it never reorders them —
+        // so iterating other's ranges and subtracting each one preserves the
+        // IpSet invariant without a second normalize pass.
+        let mut ranges = self.ranges.clone();
+        for remove in &other.ranges {
+            ranges = subtract_range(ranges, *remove);
+        }
+        IpSet::new(ranges)
     }
 
     /// Returns a new set containing every address that is in both `self` and
@@ -1463,5 +1471,140 @@ mod tests {
         assert_eq!(u.len(), 1);
         assert_eq!(u.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
         assert_eq!(u.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20));
+    }
+
+    // --- Difference ---
+
+    // cargo test ipset::tests::test_v4_difference_clips_left
+    #[test]
+    fn test_v4_difference_clips_left() {
+        // Remove the first half of a range — right piece survives
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        let b = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 100));
+        let d = a.difference(&b);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 101));
+        assert_eq!(d.ranges()[0].end(),   Ipv4Addr::new(10, 0, 0, 255));
+    }
+
+    // cargo test ipset::tests::test_v4_difference_clips_right
+    #[test]
+    fn test_v4_difference_clips_right() {
+        // Remove the last portion of a range — left piece survives
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        let b = make_v4_set(Ipv4Addr::new(10, 0, 0, 100), Ipv4Addr::new(10, 0, 0, 255));
+        let d = a.difference(&b);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 0));
+        assert_eq!(d.ranges()[0].end(),   Ipv4Addr::new(10, 0, 0, 99));
+    }
+
+    // cargo test ipset::tests::test_v4_difference_punches_hole
+    #[test]
+    fn test_v4_difference_punches_hole() {
+        // Remove from the middle — range splits into two
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        let b = make_v4_set(Ipv4Addr::new(10, 0, 0, 50), Ipv4Addr::new(10, 0, 0, 100));
+        let d = a.difference(&b);
+        assert_eq!(d.len(), 2);
+        assert_eq!(d.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 0));
+        assert_eq!(d.ranges()[0].end(),   Ipv4Addr::new(10, 0, 0, 49));
+        assert_eq!(d.ranges()[1].start(), Ipv4Addr::new(10, 0, 0, 101));
+        assert_eq!(d.ranges()[1].end(),   Ipv4Addr::new(10, 0, 0, 255));
+    }
+
+    // cargo test ipset::tests::test_v4_difference_disjoint
+    #[test]
+    fn test_v4_difference_disjoint() {
+        // b doesn't overlap a — result equals a unchanged
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        let b = make_v4_set(Ipv4Addr::new(192, 168, 1, 0), Ipv4Addr::new(192, 168, 1, 255));
+        let d = a.difference(&b);
+        assert_eq!(d, a);
+    }
+
+    // cargo test ipset::tests::test_v4_difference_equal
+    #[test]
+    fn test_v4_difference_equal() {
+        // a minus itself is empty
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        assert!(a.difference(&a).is_empty());
+    }
+
+    // cargo test ipset::tests::test_v4_difference_fully_covered
+    #[test]
+    fn test_v4_difference_fully_covered() {
+        // b entirely contains a — result is empty
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 50), Ipv4Addr::new(10, 0, 0, 100));
+        let b = make_v4_set(Ipv4Addr::new(10, 0, 0, 0),  Ipv4Addr::new(10, 0, 0, 255));
+        assert!(a.difference(&b).is_empty());
+    }
+
+    // cargo test ipset::tests::test_v4_difference_with_empty
+    #[test]
+    fn test_v4_difference_with_empty() {
+        // a minus empty is a; empty minus a is empty
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        let empty = IpSetBuilder::<Ipv4Addr>::new().build();
+        assert_eq!(a.difference(&empty), a);
+        assert!(empty.difference(&a).is_empty());
+    }
+
+    // cargo test ipset::tests::test_v4_difference_not_symmetric
+    #[test]
+    fn test_v4_difference_not_symmetric() {
+        // a ∖ b ≠ b ∖ a in general
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        let b = make_v4_set(Ipv4Addr::new(10, 0, 0, 100), Ipv4Addr::new(10, 0, 1, 255));
+        assert_ne!(a.difference(&b), b.difference(&a));
+    }
+
+    // cargo test ipset::tests::test_v4_difference_multi_range
+    #[test]
+    fn test_v4_difference_multi_range() {
+        // a has two disjoint ranges; b overlaps only the first
+        let mut ba = IpSetBuilder::<Ipv4Addr>::new();
+        ba.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255)));
+        ba.add_range(IpRange::new(Ipv4Addr::new(192, 168, 1, 0), Ipv4Addr::new(192, 168, 1, 255)));
+        let a = ba.build();
+        let b = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        let d = a.difference(&b);
+        // Only the 192.168.1.0/24 range survives
+        assert_eq!(d.len(), 1);
+        assert_eq!(d.ranges()[0].start(), Ipv4Addr::new(192, 168, 1, 0));
+        assert_eq!(d.ranges()[0].end(),   Ipv4Addr::new(192, 168, 1, 255));
+    }
+
+    // cargo test ipset::tests::test_v6_difference_punches_hole
+    #[test]
+    fn test_v6_difference_punches_hole() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 255),
+        );
+        let b = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 50),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 100),
+        );
+        let d = a.difference(&b);
+        assert_eq!(d.len(), 2);
+        assert_eq!(d.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(d.ranges()[0].end(),   Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 49));
+        assert_eq!(d.ranges()[1].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 101));
+        assert_eq!(d.ranges()[1].end(),   Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 255));
+    }
+
+    // cargo test ipset::tests::test_v6_difference_disjoint
+    #[test]
+    fn test_v6_difference_disjoint() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0xff),
+        );
+        let b = make_v6_set(
+            Ipv6Addr::new(0x2001, 0xdb9, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0x2001, 0xdb9, 0, 0, 0, 0, 0, 0xff),
+        );
+        assert_eq!(a.difference(&b), a);
     }
 }
