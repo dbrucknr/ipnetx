@@ -16,7 +16,7 @@ whether two addresses are equal. Real questions look like:
 
 - "Is this IP inside the `10.0.0.0/8` corporate network?"
 - "Do any of the ranges in this allow-list overlap with the ranges in this block-list?"
-- "I have 50 000 IPs in my firewall rules — can I reduce them to the minimal set of CIDR prefixes?"
+- "I have 50,000 IPs in my firewall rules. Can I reduce them to the minimal set of CIDR prefixes?"
 
 `ipnetx` gives you three composable building blocks for answering those questions,
 for both IPv4 and IPv6, using the address types already in `std::net`:
