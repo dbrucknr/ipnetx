@@ -8,3 +8,11 @@ repository = "https://github.com/dbrucknr/ipnetx"
 readme = "README.md"
 keywords = ["ip", "network", "cidr", "ipv4", "ipv6"]
 categories = ["network-programming"]
+
+[dev-dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }
+
+[[bench]]
+name = "ipset"
+path = "benchmarks/ipset.rs"
+harness = false

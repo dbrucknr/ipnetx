@@ -19,6 +19,7 @@
 - Or you can generate a terminal report
   - `cargo llvm-cov`
   - To see missing lines: `cargo llvm-cov --show-missing`
+- `cargo bench`
 
 # Helpful References
 - https://cs.opensource.google/go/go/+/refs/tags/go1.22.0:src/net/netip/netip.go
