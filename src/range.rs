@@ -1,5 +1,26 @@
 use crate::{interfaces::IpAddress, prefix::IpPrefix};
 
+/// An inclusive IP address range `[start, end]`.
+///
+/// A range is *valid* when `start <= end`. An invalid range (`start > end`)
+/// can be constructed with [`IpRange::new`] but is treated as empty by all
+/// operations — [`is_valid`](IpRange::is_valid) returns `false` and methods
+/// such as [`contains`](IpRange::contains) and [`overlaps`](IpRange::overlaps)
+/// always return `false`.
+///
+/// Both IPv4 and IPv6 are supported through the [`IpAddress`] bound.
+///
+/// # Examples
+///
+/// ```
+/// use std::net::Ipv4Addr;
+/// use ipnetx::range::IpRange;
+///
+/// let range = IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 255, 255, 255));
+/// assert!(range.is_valid());
+/// assert!(range.contains(Ipv4Addr::new(10, 1, 2, 3)));
+/// assert!(!range.contains(Ipv4Addr::new(192, 168, 0, 1)));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IpRange<A: IpAddress> {
     start: A,
@@ -7,35 +28,54 @@ pub struct IpRange<A: IpAddress> {
 }
 
 impl<A: IpAddress> IpRange<A> {
+    /// Creates a new range spanning `[start, end]` (both endpoints inclusive).
+    ///
+    /// Construction always succeeds. Use [`is_valid`](IpRange::is_valid) to
+    /// check whether `start <= end` before performing operations on the range.
     pub fn new(start: A, end: A) -> Self {
         Self { start, end }
     }
 
+    /// Returns the first address in the range.
+    #[must_use]
     pub fn start(&self) -> A {
         self.start
     }
 
+    /// Returns the last address in the range.
+    #[must_use]
     pub fn end(&self) -> A {
         self.end
     }
 
+    /// Returns `true` if `start <= end`.
+    ///
+    /// An invalid range is treated as empty by all operations.
     #[must_use]
     pub fn is_valid(&self) -> bool {
         self.start <= self.end
     }
 
-    // Answers the question: "Is this IP entirely enclosed by this range?"
+    /// Returns `true` if `ip` falls within `[start, end]` (inclusive).
+    ///
+    /// Always returns `false` for an invalid range.
     #[must_use]
     pub fn contains(&self, ip: A) -> bool {
         self.is_valid() && self.start <= ip && ip <= self.end
     }
 
+    /// Returns `true` if both `start` and `end` are the unspecified address
+    /// (`0.0.0.0` for IPv4, `::` for IPv6).
     #[must_use]
     pub fn is_zero(&self) -> bool {
         self.start.is_unspecified() && self.end.is_unspecified()
     }
 
-    // Answers the question: "does this share any IPs with the other range?"
+    /// Returns `true` if this range and `other` share at least one address.
+    ///
+    /// Ranges that touch at a single endpoint (e.g. `[1..5]` and `[5..10]`)
+    /// are considered overlapping — they share address `5`. Always returns
+    /// `false` if either range is invalid.
     #[must_use]
     pub fn overlaps(&self, other: &IpRange<A>) -> bool {
         self.is_valid() && other.is_valid() && self.end >= other.start && self.start <= other.end
@@ -90,6 +130,28 @@ impl<A: IpAddress> IpRange<A> {
         Some(IpPrefix::new(A::from_u128(start), mask).unwrap())
     }
 
+    /// Decomposes this range into the minimal list of CIDR prefixes that
+    /// exactly cover it.
+    ///
+    /// Prefixes are returned in ascending address order. An unaligned or
+    /// non-power-of-two range may require multiple prefixes — for example,
+    /// `1..254` decomposes into 14 prefixes. Returns an empty `Vec` for an
+    /// invalid range.
+    ///
+    /// To check whether a range is already a single CIDR block, prefer
+    /// [`prefix`](IpRange::prefix), which avoids allocating the full list.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::net::Ipv4Addr;
+    /// use ipnetx::range::IpRange;
+    ///
+    /// let range = IpRange::new(Ipv4Addr::new(192, 168, 1, 0), Ipv4Addr::new(192, 168, 1, 255));
+    /// let prefixes = range.prefixes();
+    /// assert_eq!(prefixes.len(), 1);
+    /// assert_eq!(prefixes[0].mask(), 24);
+    /// ```
     #[must_use]
     pub fn prefixes(&self) -> Vec<IpPrefix<A>> {
         if !self.is_valid() {

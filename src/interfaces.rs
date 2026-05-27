@@ -20,6 +20,8 @@ pub trait IpAddress:
     /// Number of bits in this address type: 32 for IPv4, 128 for IPv6.
     const BITS: u8;
 
+    /// Returns `true` if this is the unspecified address (`0.0.0.0` for IPv4,
+    /// `::` for IPv6).
     fn is_unspecified(&self) -> bool;
 
     /// Convert this address to a u128. IPv4 uses the low 32 bits.

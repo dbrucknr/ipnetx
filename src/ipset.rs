@@ -1,5 +1,28 @@
 use crate::{interfaces::IpAddress, prefix::IpPrefix, range::IpRange};
 
+/// A builder for constructing a normalized [`IpSet`].
+///
+/// Ranges and prefixes may be added or removed in any order and any
+/// combination. When [`build`](IpSetBuilder::build) is called the builder
+/// sorts all pending ranges and merges any that are adjacent or overlapping,
+/// producing an [`IpSet`] whose ranges are non-overlapping and in ascending
+/// order.
+///
+/// # Examples
+///
+/// ```
+/// use std::net::Ipv4Addr;
+/// use ipnetx::prefix::IpPrefix;
+/// use ipnetx::ipset::IpSetBuilder;
+///
+/// let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+/// builder.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap());
+/// builder.remove_ip(Ipv4Addr::new(10, 0, 0, 1));
+/// let set = builder.build();
+///
+/// assert!(!set.contains_ip(Ipv4Addr::new(10, 0, 0, 1)));
+/// assert!(set.contains_ip(Ipv4Addr::new(10, 0, 0, 2)));
+/// ```
 pub struct IpSetBuilder<A: IpAddress> {
     ranges: Vec<IpRange<A>>,
 }
@@ -11,27 +34,51 @@ impl<A: IpAddress> Default for IpSetBuilder<A> {
 }
 
 impl<A: IpAddress> IpSetBuilder<A> {
+    /// Creates a new empty builder.
+    ///
+    /// Equivalent to [`IpSetBuilder::default`].
     pub fn new() -> Self {
         Self { ranges: Vec::new() }
     }
 
+    /// Adds a single IP address to the set.
+    ///
+    /// Equivalent to adding a host prefix (`/32` for IPv4, `/128` for IPv6).
+    /// Adjacent or overlapping entries are merged when [`build`](IpSetBuilder::build)
+    /// is called.
     pub fn add_ip(&mut self, ip: A) {
         // A single IP is nothing more than a range where start == end — a range of size 1
         let range = IpRange::new(ip, ip);
         self.add_range(range);
     }
 
+    /// Removes a single IP address from the set.
+    ///
+    /// If the address falls in the middle of a stored range, that range is
+    /// split into two. Has no effect if the address is not present.
     pub fn remove_ip(&mut self, ip: A) {
         let range = IpRange::new(ip, ip);
         self.remove_range(range);
     }
 
+    /// Adds an address range to the set.
+    ///
+    /// Invalid ranges (`start > end`) are silently ignored. Adjacent or
+    /// overlapping ranges are merged when [`build`](IpSetBuilder::build) is called.
     pub fn add_range(&mut self, range: IpRange<A>) {
         if range.is_valid() {
             self.ranges.push(range);
         }
     }
 
+    /// Removes an address range from the set.
+    ///
+    /// Each stored range that intersects `range` is trimmed or split as needed.
+    /// Five cases arise per stored range: no overlap (kept), fully covered
+    /// (dropped), clips left end (right piece survives), clips right end (left
+    /// piece survives), or middle removal (splits into two ranges).
+    ///
+    /// Invalid ranges (`start > end`) are silently ignored.
     pub fn remove_range(&mut self, range: IpRange<A>) {
         // O(n) time complexity
         if !range.is_valid() {
@@ -66,16 +113,27 @@ impl<A: IpAddress> IpSetBuilder<A> {
         self.ranges = result;
     }
 
+    /// Adds all addresses covered by `prefix` to the set.
+    ///
+    /// Equivalent to `add_range(prefix.to_range())`.
     pub fn add_prefix(&mut self, prefix: IpPrefix<A>) {
         let range = prefix.to_range();
         self.add_range(range);
     }
 
+    /// Removes all addresses covered by `prefix` from the set.
+    ///
+    /// Equivalent to `remove_range(prefix.to_range())`.
     pub fn remove_prefix(&mut self, prefix: IpPrefix<A>) {
         let range = prefix.to_range();
         self.remove_range(range);
     }
 
+    /// Consumes the builder and returns a normalized [`IpSet`].
+    ///
+    /// All pending ranges are sorted by start address and merged: adjacent or
+    /// overlapping ranges are collapsed into a single range. The resulting
+    /// [`IpSet`] contains non-overlapping ranges in ascending order.
     #[must_use]
     pub fn build(mut self) -> IpSet<A> {
         // Sort by Address
@@ -100,6 +158,27 @@ impl<A: IpAddress> IpSetBuilder<A> {
     }
 }
 
+/// An immutable, normalized set of IP addresses.
+///
+/// An `IpSet` is always constructed through [`IpSetBuilder::build`], which
+/// guarantees that the internal ranges are sorted by start address,
+/// non-overlapping, and non-adjacent. This invariant enables O(log n)
+/// membership queries via binary search.
+///
+/// # Examples
+///
+/// ```
+/// use std::net::Ipv4Addr;
+/// use ipnetx::prefix::IpPrefix;
+/// use ipnetx::ipset::IpSetBuilder;
+///
+/// let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+/// builder.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap());
+/// let set = builder.build();
+///
+/// assert!(set.contains_ip(Ipv4Addr::new(10, 1, 2, 3)));
+/// assert!(!set.contains_ip(Ipv4Addr::new(192, 168, 1, 1)));
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IpSet<A: IpAddress> {
     ranges: Vec<IpRange<A>>,
@@ -110,13 +189,19 @@ impl<A: IpAddress> IpSet<A> {
         Self { ranges }
     }
 
+    /// Returns the normalized ranges that make up this set.
+    ///
+    /// Ranges are sorted by start address, non-overlapping, and non-adjacent.
     #[must_use]
     pub fn ranges(&self) -> &[IpRange<A>] {
         &self.ranges
     }
 
-    // This may be a very long vector...
-    // NOTE: Must be normalized (sorted) first!
+    /// Returns the minimal list of CIDR prefixes that exactly cover this set.
+    ///
+    /// Each internal range is decomposed via [`IpRange::prefixes`] and the
+    /// results are concatenated in ascending address order. The returned list
+    /// can be large for sets that contain many unaligned ranges.
     #[must_use]
     pub fn prefixes(&self) -> Vec<IpPrefix<A>> {
         let mut prefixes = Vec::<IpPrefix<A>>::new();
@@ -126,6 +211,9 @@ impl<A: IpAddress> IpSet<A> {
         prefixes
     }
 
+    /// Returns `true` if `ip` is a member of this set.
+    ///
+    /// Uses binary search — O(log n) in the number of stored ranges.
     #[must_use]
     pub fn contains_ip(&self, ip: A) -> bool {
         // O(log n) instead of O(n) linear scan
@@ -142,7 +230,14 @@ impl<A: IpAddress> IpSet<A> {
             .is_ok()
     }
 
-    // Answers the question:  "is this range entirely enclosed by the set?"
+    /// Returns `true` if every address in `range` is a member of this set.
+    ///
+    /// The entire range must be enclosed within a *single* stored range. A
+    /// query that spans a gap between two stored ranges returns `false` even
+    /// if both endpoints are individually contained. Returns `false` for
+    /// invalid ranges (`start > end`).
+    ///
+    /// Uses binary search — O(log n) in the number of stored ranges.
     #[must_use]
     pub fn contains_range(&self, range: IpRange<A>) -> bool {
         if !range.is_valid() {
@@ -166,6 +261,11 @@ impl<A: IpAddress> IpSet<A> {
         }
     }
 
+    /// Returns `true` if this set and `other` share at least one address.
+    ///
+    /// Exploits the sorted, non-overlapping invariant of both sets to walk
+    /// them simultaneously in O(n + m) time rather than the O(n × m) of a
+    /// naive nested loop.
     #[must_use]
     pub fn overlaps_ip_set(&self, other: &IpSet<A>) -> bool {
         // Both sets are sorted and non-overlapping (guaranteed by the IpSetBuilder's .build())
@@ -191,11 +291,16 @@ impl<A: IpAddress> IpSet<A> {
         false
     }
 
+    /// Returns the number of distinct ranges in this set.
+    ///
+    /// This is the count of *ranges*, not individual IP addresses — a single
+    /// range can span billions of addresses.
     #[must_use]
     pub fn len(&self) -> usize {
         self.ranges.len()
     }
 
+    /// Returns `true` if the set contains no addresses.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.ranges.is_empty()

@@ -1,17 +1,42 @@
 use crate::{interfaces::IpAddress, range::IpRange};
 
+/// A CIDR prefix: an IP address paired with a prefix length.
+///
+/// A prefix represents all addresses that share the same top `mask` bits as
+/// `ip`. The constructor [`IpPrefix::new`] does not zero host bits — use
+/// [`masked`](IpPrefix::masked) to obtain canonical form where host bits are
+/// all zero.
+///
+/// The prefix length must be in `[0, A::BITS]`: `[0, 32]` for IPv4 and
+/// `[0, 128]` for IPv6.
+///
+/// # Examples
+///
+/// ```
+/// use std::net::Ipv4Addr;
+/// use ipnetx::prefix::IpPrefix;
+///
+/// let prefix = IpPrefix::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap();
+/// assert!(prefix.contains(Ipv4Addr::new(192, 168, 1, 100)));
+/// assert!(!prefix.contains(Ipv4Addr::new(192, 168, 2, 0)));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IpPrefix<A: IpAddress> {
     ip: A,
     mask: u8,
 }
 
+/// Error returned by [`IpPrefix::new`] when the mask exceeds the address
+/// bit width (`> 32` for IPv4, `> 128` for IPv6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InvalidPrefixLen;
 
 impl<A: IpAddress> IpPrefix<A> {
-    /// Returns `None` if `mask` exceeds the address bit width
-    /// (> 32 for IPv4, > 128 for IPv6).
+    /// Creates a new prefix from an IP address and a prefix length.
+    ///
+    /// Returns [`Err(InvalidPrefixLen)`](InvalidPrefixLen) if `mask > A::BITS`.
+    /// Host bits in `ip` are preserved; use [`masked`](IpPrefix::masked) to
+    /// zero them if canonical form is required.
     pub fn new(ip: A, mask: u8) -> Result<Self, InvalidPrefixLen> {
         if mask > A::BITS {
             return Err(InvalidPrefixLen);
@@ -19,16 +44,30 @@ impl<A: IpAddress> IpPrefix<A> {
         Ok(Self { ip, mask })
     }
 
+    /// Returns the IP address portion of the prefix.
+    ///
+    /// This may contain host bits if the prefix was not constructed with a
+    /// network address. Use [`masked`](IpPrefix::masked) to obtain a version
+    /// with host bits zeroed.
     #[must_use]
     pub fn ip(&self) -> A {
         self.ip
     }
 
+    /// Returns the prefix length (number of network bits).
+    ///
+    /// Always in the range `[0, A::BITS]`.
     #[must_use]
     pub fn mask(&self) -> u8 {
         self.mask
     }
 
+    /// Returns `true` if `ip` falls within this prefix.
+    ///
+    /// Two addresses share the same network when their top `mask` bits are
+    /// identical. Host bits in this prefix's IP are masked out before
+    /// comparison, so `192.168.1.100/24` and `192.168.1.0/24` contain the
+    /// same set of addresses.
     #[must_use]
     pub fn contains(&self, ip: A) -> bool {
         // Two addresses share the same /mask prefix iff their top `mask` bits
@@ -37,6 +76,23 @@ impl<A: IpAddress> IpPrefix<A> {
         self.ip.to_u128() & network == ip.to_u128() & network
     }
 
+    /// Converts this prefix to the equivalent inclusive address range.
+    ///
+    /// The start of the range is the network address (host bits zeroed) and
+    /// the end is the broadcast address (host bits set to all ones). Host bits
+    /// in this prefix's IP are masked out before the conversion.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::net::Ipv4Addr;
+    /// use ipnetx::prefix::IpPrefix;
+    ///
+    /// let prefix = IpPrefix::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap();
+    /// let range = prefix.to_range();
+    /// assert_eq!(range.start(), Ipv4Addr::new(192, 168, 1, 0));
+    /// assert_eq!(range.end(), Ipv4Addr::new(192, 168, 1, 255));
+    /// ```
     #[must_use]
     pub fn to_range(&self) -> IpRange<A> {
         let ip = self.ip.to_u128();
@@ -74,7 +130,7 @@ impl<A: IpAddress> IpPrefix<A> {
     ///
     /// Two CIDR prefixes either nest (one contains the other) or are disjoint —
     /// partial overlap as seen with arbitrary ranges is not possible. This method
-    /// delegates to [`IpRange::overlaps`] via [`to_range`], so the host bits of
+    /// delegates to [`IpRange::overlaps`] via [`IpPrefix::to_range`], so the host bits of
     /// each prefix's IP are automatically masked out before comparison.
     #[must_use]
     pub fn overlaps(&self, other: &IpPrefix<A>) -> bool {
