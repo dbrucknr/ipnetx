@@ -1,4 +1,9 @@
-use crate::{interfaces::IpAddress, prefix::IpPrefix, range::IpRange};
+use crate::{
+    interfaces::IpAddress,
+    prefix::IpPrefix,
+    range::IpRange,
+    tools::range::{normalize, subtract_range},
+};
 
 /// A builder for constructing a normalized [`IpSet`].
 ///
@@ -85,32 +90,9 @@ impl<A: IpAddress> IpSetBuilder<A> {
             return;
         }
 
-        let start = range.start().to_u128();
-        let end = range.end().to_u128();
-
-        let mut result = Vec::new();
-
-        for stored in self.ranges.drain(..) {
-            let s = stored.start().to_u128();
-            let e = stored.end().to_u128();
-
-            if e < start || s > end {
-                // No overlap - keep
-                result.push(stored);
-            } else {
-                // Left piece stays if the stored range starts before the removal
-                if s < start {
-                    result.push(IpRange::new(stored.start(), A::from_u128(start - 1)));
-                }
-                // Right piece stays if the stored range ends after the removal
-                if e > end {
-                    result.push(IpRange::new(A::from_u128(end + 1), stored.end()));
-                }
-                // If neither condition was true, the stored range was fully covered. It is dropped.
-            }
-        }
-
-        self.ranges = result;
+        // std::mem::take swaps self.ranges out with an empty Vec, giving
+        // subtract_range ownership of the data. The result is assigned back.
+        self.ranges = subtract_range(std::mem::take(&mut self.ranges), range);
     }
 
     /// Adds all addresses covered by `prefix` to the set.
@@ -135,26 +117,25 @@ impl<A: IpAddress> IpSetBuilder<A> {
     /// overlapping ranges are collapsed into a single range. The resulting
     /// [`IpSet`] contains non-overlapping ranges in ascending order.
     #[must_use]
-    pub fn build(mut self) -> IpSet<A> {
-        // Sort by Address
-        self.ranges.sort_by_key(|range| range.start().to_u128());
-        // Merge overlapping ranges
-        let mut merged = Vec::<IpRange<A>>::new();
-        for range in self.ranges {
-            match merged.last_mut() {
-                Some(last) if range.start().to_u128() <= last.end().to_u128().saturating_add(1) => {
-                    // Extend if this range reaches further than the last merged range
-                    if range.end().to_u128() > last.end().to_u128() {
-                        *last = IpRange::new(last.start(), range.end());
-                    }
-                }
-                _ => {
-                    // Otherwise, add the new range
-                    merged.push(range);
-                }
-            }
-        }
+    pub fn build(self) -> IpSet<A> {
+        let merged = normalize(self.ranges);
         IpSet::new(merged)
+    }
+
+    pub fn union(&self, other: &IpSet<A>) -> IpSet<A> {
+        todo!()
+    }
+
+    pub fn intersection(&self, other: &IpSet<A>) -> IpSet<A> {
+        todo!()
+    }
+
+    pub fn difference(&self, other: &IpSet<A>) -> IpSet<A> {
+        todo!()
+    }
+
+    pub fn complement(&self) -> IpSet<A> {
+        todo!()
     }
 }
 

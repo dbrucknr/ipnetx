@@ -2,7 +2,7 @@
 name = "ipnetx"
 version = "0.1.0"
 edition = "2024"
-description = "IP address range, prefix, and set operations for IPv4 and IPv6"
+description = "ipnetx is the crate for set operations on IP address space — union, intersection, difference, and complement over arbitrary collections of ranges and CIDR prefixes, for both IPv4 and IPv6."
 license = "MIT"
 repository = "https://github.com/dbrucknr/ipnetx"
 readme = "README.md"
