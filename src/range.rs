@@ -19,20 +19,24 @@ impl<A: IpAddress> IpRange<A> {
         self.end
     }
 
+    #[must_use]
     pub fn is_valid(&self) -> bool {
         self.start <= self.end
     }
 
     // Answers the question: "Is this IP entirely enclosed by this range?"
+    #[must_use]
     pub fn contains(&self, ip: A) -> bool {
         self.is_valid() && self.start <= ip && ip <= self.end
     }
 
+    #[must_use]
     pub fn is_zero(&self) -> bool {
         self.start.is_unspecified() && self.end.is_unspecified()
     }
 
     // Answers the question: "does this share any IPs with the other range?"
+    #[must_use]
     pub fn overlaps(&self, other: &IpRange<A>) -> bool {
         self.is_valid() && other.is_valid() && self.end >= other.start && self.start <= other.end
     }
@@ -68,28 +72,25 @@ impl<A: IpAddress> IpRange<A> {
         }
 
         // h = host bits in the CIDR prefix.
+        // For IPv4 h <= 32 == bits; for IPv6 h <= 128 == bits — never exceeds bits.
         let h = if size == 0 {
+            // This line: `h = if size == 0` is showing as a missing region in llvm-cov (it's covered by IPv6, but not reachable with IPv4)
             128
         } else {
             size.trailing_zeros()
         };
-        if h > bits {
-            return None; // sanity check - can't exceed the address family width
-        }
 
         // start must be aligned to the block: its bottom h bits must all be zero.
         if start.trailing_zeros() < h {
             return None;
         }
 
+        // mask is always in [0, bits]: IpPrefix::new cannot fail here.
         let mask = bits as u8 - h as u8;
-        if let Ok(prefix) = IpPrefix::new(A::from_u128(start), mask) {
-            Some(prefix)
-        } else {
-            None
-        }
+        Some(IpPrefix::new(A::from_u128(start), mask).unwrap())
     }
 
+    #[must_use]
     pub fn prefixes(&self) -> Vec<IpPrefix<A>> {
         if !self.is_valid() {
             return Vec::new();

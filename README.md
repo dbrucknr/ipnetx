@@ -27,3 +27,4 @@ Setup Testing Coverage
 - `cargo llvm-cov --html`
 - `open target/llvm-cov/html/index.html`
 - OR: `cargo llvm-cov`
+- `cargo llvm-cov --show-missing-lines`

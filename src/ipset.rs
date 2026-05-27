@@ -4,6 +4,12 @@ pub struct IpSetBuilder<A: IpAddress> {
     ranges: Vec<IpRange<A>>,
 }
 
+impl<A: IpAddress> Default for IpSetBuilder<A> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<A: IpAddress> IpSetBuilder<A> {
     pub fn new() -> Self {
         Self { ranges: Vec::new() }
@@ -70,6 +76,7 @@ impl<A: IpAddress> IpSetBuilder<A> {
         self.remove_range(range);
     }
 
+    #[must_use]
     pub fn build(mut self) -> IpSet<A> {
         // Sort by Address
         self.ranges.sort_by_key(|range| range.start().to_u128());
@@ -103,12 +110,14 @@ impl<A: IpAddress> IpSet<A> {
         Self { ranges }
     }
 
+    #[must_use]
     pub fn ranges(&self) -> &[IpRange<A>] {
         &self.ranges
     }
 
     // This may be a very long vector...
     // NOTE: Must be normalized (sorted) first!
+    #[must_use]
     pub fn prefixes(&self) -> Vec<IpPrefix<A>> {
         let mut prefixes = Vec::<IpPrefix<A>>::new();
         for range in &self.ranges {
@@ -117,6 +126,7 @@ impl<A: IpAddress> IpSet<A> {
         prefixes
     }
 
+    #[must_use]
     pub fn contains_ip(&self, ip: A) -> bool {
         // O(log n) instead of O(n) linear scan
         self.ranges
@@ -133,6 +143,7 @@ impl<A: IpAddress> IpSet<A> {
     }
 
     // Answers the question:  "is this range entirely enclosed by the set?"
+    #[must_use]
     pub fn contains_range(&self, range: IpRange<A>) -> bool {
         if !range.is_valid() {
             return false;
@@ -155,6 +166,7 @@ impl<A: IpAddress> IpSet<A> {
         }
     }
 
+    #[must_use]
     pub fn overlaps_ip_set(&self, other: &IpSet<A>) -> bool {
         // Both sets are sorted and non-overlapping (guaranteed by the IpSetBuilder's .build())
         // We can walk them together in O(n + m) time rather than O(n * m) if we were to loop over all pairs (nested loops)
@@ -179,10 +191,12 @@ impl<A: IpAddress> IpSet<A> {
         false
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.ranges.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.ranges.is_empty()
     }
@@ -194,6 +208,14 @@ mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     // --- Construction ---
+
+    // cargo test ipset::tests::test_v4_ipset_default_construction
+    #[test]
+    fn test_v4_ipset_default_construction() {
+        let builder = IpSetBuilder::<Ipv4Addr>::default();
+        let ipset = builder.build();
+        assert!(ipset.is_empty());
+    }
 
     // cargo test ipset::tests::test_v4_ipset_add_range_construction
     #[test]
@@ -408,6 +430,25 @@ mod tests {
     // Note on remove operations: removing from the middle of a stored range requires splitting it into up to two pieces.
     // Five cases arise per stored range: no overlap (keep), fully covered (drop), clips left end (trim start),
     // clips right end (trim end), removal in the middle (split into two).
+
+    // cargo test ipset::tests::test_remove_range_invalid_is_noop
+    #[test]
+    fn test_remove_range_invalid_is_noop() {
+        // An invalid range (start > end) is silently ignored — stored ranges unchanged
+        let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 10),
+        ));
+        builder.remove_range(IpRange::new(
+            Ipv4Addr::new(10, 0, 0, 10),
+            Ipv4Addr::new(10, 0, 0, 1), // start > end — invalid
+        ));
+        let ipset = builder.build();
+        assert_eq!(ipset.len(), 1);
+        assert_eq!(ipset.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 1));
+        assert_eq!(ipset.ranges()[0].end(), Ipv4Addr::new(10, 0, 0, 10));
+    }
 
     // --- Remove Range ---
     // cargo test ipset::tests::test_remove_range

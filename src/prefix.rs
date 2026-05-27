@@ -19,14 +19,17 @@ impl<A: IpAddress> IpPrefix<A> {
         Ok(Self { ip, mask })
     }
 
+    #[must_use]
     pub fn ip(&self) -> A {
         self.ip
     }
 
+    #[must_use]
     pub fn mask(&self) -> u8 {
         self.mask
     }
 
+    #[must_use]
     pub fn contains(&self, ip: A) -> bool {
         // Two addresses share the same /mask prefix iff their top `mask` bits
         // are identical — mask the host bits of both and compare.
@@ -34,6 +37,7 @@ impl<A: IpAddress> IpPrefix<A> {
         self.ip.to_u128() & network == ip.to_u128() & network
     }
 
+    #[must_use]
     pub fn to_range(&self) -> IpRange<A> {
         let ip = self.ip.to_u128();
         let network = self.network_mask();
@@ -51,6 +55,7 @@ impl<A: IpAddress> IpPrefix<A> {
     /// - `192.168.1.100/24` → `192.168.1.0/24`
     /// - `192.168.1.0/24`   → `192.168.1.0/24`  (already masked; no change)
     /// - `10.0.0.1/32`      → `10.0.0.1/32`     (/32 has no host bits to zero)
+    #[must_use]
     pub fn masked(&self) -> Self {
         Self {
             ip: A::from_u128(self.ip.to_u128() & self.network_mask()),
@@ -60,6 +65,7 @@ impl<A: IpAddress> IpPrefix<A> {
 
     /// Returns `true` if this prefix covers exactly one IP address
     /// (i.e. `/32` for IPv4 or `/128` for IPv6).
+    #[must_use]
     pub fn is_single_ip(&self) -> bool {
         self.mask == A::BITS
     }
@@ -70,6 +76,7 @@ impl<A: IpAddress> IpPrefix<A> {
     /// partial overlap as seen with arbitrary ranges is not possible. This method
     /// delegates to [`IpRange::overlaps`] via [`to_range`], so the host bits of
     /// each prefix's IP are automatically masked out before comparison.
+    #[must_use]
     pub fn overlaps(&self, other: &IpPrefix<A>) -> bool {
         self.to_range().overlaps(&other.to_range())
     }
@@ -336,16 +343,14 @@ mod tests {
     // cargo test prefix::tests::test_v6_is_single_ip_slash128
     #[test]
     fn test_v6_is_single_ip_slash128() {
-        let prefix =
-            IpPrefix::new(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1), 128).unwrap();
+        let prefix = IpPrefix::new(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1), 128).unwrap();
         assert!(prefix.is_single_ip());
     }
 
     // cargo test prefix::tests::test_v6_is_single_ip_not_slash128
     #[test]
     fn test_v6_is_single_ip_not_slash128() {
-        let prefix =
-            IpPrefix::new(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0), 64).unwrap();
+        let prefix = IpPrefix::new(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0), 64).unwrap();
         assert!(!prefix.is_single_ip());
     }
 

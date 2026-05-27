@@ -30,8 +30,8 @@
 | `Range()` | ✅ `to_range()` | |
 | `String()` | ✅ `Display` | |
 | `Masked()` | ✅ | Zeroes host bits — `192.168.1.100/24` → `192.168.1.0/24` |
-| `IsSingleIP()` | ❌ | `mask == A::BITS` — trivial once added |
-| `Overlaps(prefix)` | ❌ | Can be expressed via `to_range()` + `IpRange::overlaps` but a direct method would be cleaner |
+| `IsSingleIP()` | ✅ | `mask == A::BITS` — trivial once added |
+| `Overlaps(prefix)` | ✅ | Can be expressed via `to_range()` + `IpRange::overlaps` but a direct method would be cleaner |
 
 ### `IpSetBuilder`
 
