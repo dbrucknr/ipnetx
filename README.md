@@ -3,8 +3,9 @@
 IP address range, prefix, and set operations for IPv4 and IPv6.
 
 [![Crates.io](https://img.shields.io/crates/v/ipnetx.svg)](https://crates.io/crates/ipnetx)
-[![Docs.rs](https://docs.rs/ipnetx/badge.svg)](https://docs.rs/ipnetx)
+[![Docs.rs](https://docs.rs/ipnetx/latest/ipnetx/badge.svg)](https://docs.rs/ipnetx/latest/ipnetx/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![codecov](https://codecov.io/gh/dbrucknr/ipnetx/graph/badge.svg)](https://codecov.io/gh/dbrucknr/ipnetx)
 
 ---
 
