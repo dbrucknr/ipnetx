@@ -349,7 +349,7 @@ impl<A: IpAddress> IpSet<A> {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```
     /// use std::net::Ipv4Addr;
     /// use ipnetx::prefix::IpPrefix;
     /// use ipnetx::ipset::IpSetBuilder;
@@ -368,7 +368,44 @@ impl<A: IpAddress> IpSet<A> {
     /// ```
     #[must_use]
     pub fn intersection(&self, other: &IpSet<A>) -> IpSet<A> {
-        todo!()
+        // Two-pointer merge — O(m + n).
+        // Both sets are sorted and non-overlapping, so we walk them together.
+        // When two ranges overlap their intersection is [max(start), min(end)].
+        // We then advance whichever pointer ends first — it cannot contribute
+        // further intersections with the other set's current range.
+        // The output is produced in ascending order and is already non-overlapping,
+        // so no normalize pass is needed.
+        let mut result = Vec::new();
+        let mut i = 0;
+        let mut j = 0;
+
+        while i < self.ranges.len() && j < other.ranges.len() {
+            let a = &self.ranges[i];
+            let b = &other.ranges[j];
+
+            let a_start = a.start().to_u128();
+            let a_end   = a.end().to_u128();
+            let b_start = b.start().to_u128();
+            let b_end   = b.end().to_u128();
+
+            if a.overlaps(b) {
+                let start = A::from_u128(a_start.max(b_start));
+                let end   = A::from_u128(a_end.min(b_end));
+                result.push(IpRange::new(start, end));
+            }
+
+            // Advance the range that ends first; if tied, advance both.
+            if a_end < b_end {
+                i += 1;
+            } else if b_end < a_end {
+                j += 1;
+            } else {
+                i += 1;
+                j += 1;
+            }
+        }
+
+        IpSet::new(result)
     }
 
     /// Returns a new set containing every address that is *not* in `self`.
@@ -378,7 +415,7 @@ impl<A: IpAddress> IpSet<A> {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```
     /// use std::net::Ipv4Addr;
     /// use ipnetx::prefix::IpPrefix;
     /// use ipnetx::ipset::IpSetBuilder;
@@ -393,7 +430,55 @@ impl<A: IpAddress> IpSet<A> {
     /// ```
     #[must_use]
     pub fn complement(&self) -> IpSet<A> {
-        todo!()
+        // MAX address for this address family:
+        //   IPv4 → u32::MAX (low 32 bits of u128)
+        //   IPv6 → u128::MAX
+        // Computed as u128::MAX >> (128 - BITS).  When BITS == 128 the shift is
+        // 0, giving u128::MAX.  When BITS == 32 the shift is 96, giving 0xFFFF_FFFF.
+        let max_addr = u128::MAX >> (128u32.saturating_sub(A::BITS as u32));
+
+        // Empty set — complement is the entire address space.
+        if self.is_empty() {
+            return IpSet::new(vec![IpRange::new(
+                A::from_u128(0),
+                A::from_u128(max_addr),
+            )]);
+        }
+
+        let mut result = Vec::new();
+
+        // Head gap: [0 .. first.start - 1]
+        let first_start = self.ranges[0].start().to_u128();
+        if first_start > 0 {
+            result.push(IpRange::new(
+                A::from_u128(0),
+                A::from_u128(first_start - 1),
+            ));
+        }
+
+        // Interior gaps: between every consecutive pair of stored ranges.
+        // A normalised set is strictly non-overlapping and non-adjacent, so
+        // next_start is always > prev_end + 1.
+        for window in self.ranges.windows(2) {
+            let prev_end = window[0].end().to_u128();
+            let next_start = window[1].start().to_u128();
+            result.push(IpRange::new(
+                A::from_u128(prev_end + 1),
+                A::from_u128(next_start - 1),
+            ));
+        }
+
+        // Tail gap: [last.end + 1 .. MAX]
+        let last_end = self.ranges.last().unwrap().end().to_u128();
+        if last_end < max_addr {
+            result.push(IpRange::new(
+                A::from_u128(last_end + 1),
+                A::from_u128(max_addr),
+            ));
+        }
+
+        // Output is already sorted and non-overlapping — no normalize pass needed.
+        IpSet::new(result)
     }
 }
 
@@ -1606,5 +1691,285 @@ mod tests {
             Ipv6Addr::new(0x2001, 0xdb9, 0, 0, 0, 0, 0, 0xff),
         );
         assert_eq!(a.difference(&b), a);
+    }
+
+    // --- Intersection ---
+
+    // cargo test ipset::tests::test_v4_intersection_subset
+    #[test]
+    fn test_v4_intersection_subset() {
+        // b ⊂ a — intersection equals b
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        let b = make_v4_set(Ipv4Addr::new(10, 0, 0, 50), Ipv4Addr::new(10, 0, 0, 100));
+        assert_eq!(a.intersection(&b), b);
+    }
+
+    // cargo test ipset::tests::test_v4_intersection_partial_overlap
+    #[test]
+    fn test_v4_intersection_partial_overlap() {
+        // Ranges cross — only the overlapping portion is kept
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0),   Ipv4Addr::new(10, 0, 0, 150));
+        let b = make_v4_set(Ipv4Addr::new(10, 0, 0, 100), Ipv4Addr::new(10, 0, 0, 255));
+        let inter = a.intersection(&b);
+        assert_eq!(inter.len(), 1);
+        assert_eq!(inter.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 100));
+        assert_eq!(inter.ranges()[0].end(),   Ipv4Addr::new(10, 0, 0, 150));
+    }
+
+    // cargo test ipset::tests::test_v4_intersection_disjoint
+    #[test]
+    fn test_v4_intersection_disjoint() {
+        // No shared addresses — result is empty
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0),     Ipv4Addr::new(10, 0, 0, 255));
+        let b = make_v4_set(Ipv4Addr::new(192, 168, 1, 0),  Ipv4Addr::new(192, 168, 1, 255));
+        assert!(a.intersection(&b).is_empty());
+    }
+
+    // cargo test ipset::tests::test_v4_intersection_equal
+    #[test]
+    fn test_v4_intersection_equal() {
+        // a ∩ a == a
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        assert_eq!(a.intersection(&a), a);
+    }
+
+    // cargo test ipset::tests::test_v4_intersection_with_empty
+    #[test]
+    fn test_v4_intersection_with_empty() {
+        // a ∩ ∅ == ∅
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        let empty = IpSetBuilder::<Ipv4Addr>::new().build();
+        assert!(a.intersection(&empty).is_empty());
+        assert!(empty.intersection(&a).is_empty());
+    }
+
+    // cargo test ipset::tests::test_v4_intersection_symmetric
+    #[test]
+    fn test_v4_intersection_symmetric() {
+        // a ∩ b == b ∩ a
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0),   Ipv4Addr::new(10, 0, 0, 200));
+        let b = make_v4_set(Ipv4Addr::new(10, 0, 0, 100), Ipv4Addr::new(10, 0, 0, 255));
+        assert_eq!(a.intersection(&b), b.intersection(&a));
+    }
+
+    // cargo test ipset::tests::test_v4_intersection_multiple_ranges
+    #[test]
+    fn test_v4_intersection_multiple_ranges() {
+        // Both sets have multiple ranges — two-pointer correctly pairs them up
+        // a: [10.0.0.0..10.0.0.100] and [192.168.0.0..192.168.0.255]
+        // b: [10.0.0.50..10.0.0.200] and [192.168.0.100..192.168.1.50]
+        // expected: [10.0.0.50..10.0.0.100] and [192.168.0.100..192.168.0.255]
+        let mut ba = IpSetBuilder::<Ipv4Addr>::new();
+        ba.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0),   Ipv4Addr::new(10, 0, 0, 100)));
+        ba.add_range(IpRange::new(Ipv4Addr::new(192, 168, 0, 0), Ipv4Addr::new(192, 168, 0, 255)));
+        let a = ba.build();
+
+        let mut bb = IpSetBuilder::<Ipv4Addr>::new();
+        bb.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 50),   Ipv4Addr::new(10, 0, 0, 200)));
+        bb.add_range(IpRange::new(Ipv4Addr::new(192, 168, 0, 100), Ipv4Addr::new(192, 168, 1, 50)));
+        let b = bb.build();
+
+        let inter = a.intersection(&b);
+        assert_eq!(inter.len(), 2);
+        assert_eq!(inter.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 50));
+        assert_eq!(inter.ranges()[0].end(),   Ipv4Addr::new(10, 0, 0, 100));
+        assert_eq!(inter.ranges()[1].start(), Ipv4Addr::new(192, 168, 0, 100));
+        assert_eq!(inter.ranges()[1].end(),   Ipv4Addr::new(192, 168, 0, 255));
+    }
+
+    // cargo test ipset::tests::test_v4_intersection_tied_ends
+    #[test]
+    fn test_v4_intersection_tied_ends() {
+        // Two ranges that end at exactly the same address — both pointers advance
+        // a: [10.0.0.0..10.0.0.255] and [10.0.1.0..10.0.1.255]
+        // b: [10.0.0.100..10.0.0.255] and [10.0.1.100..10.0.1.255]
+        let mut ba = IpSetBuilder::<Ipv4Addr>::new();
+        ba.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0),   Ipv4Addr::new(10, 0, 0, 255)));
+        ba.add_range(IpRange::new(Ipv4Addr::new(10, 0, 1, 0),   Ipv4Addr::new(10, 0, 1, 255)));
+        let a = ba.build();
+
+        let mut bb = IpSetBuilder::<Ipv4Addr>::new();
+        bb.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 100), Ipv4Addr::new(10, 0, 0, 255)));
+        bb.add_range(IpRange::new(Ipv4Addr::new(10, 0, 1, 100), Ipv4Addr::new(10, 0, 1, 255)));
+        let b = bb.build();
+
+        let inter = a.intersection(&b);
+        assert_eq!(inter.len(), 2);
+        assert_eq!(inter.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 100));
+        assert_eq!(inter.ranges()[0].end(),   Ipv4Addr::new(10, 0, 0, 255));
+        assert_eq!(inter.ranges()[1].start(), Ipv4Addr::new(10, 0, 1, 100));
+        assert_eq!(inter.ranges()[1].end(),   Ipv4Addr::new(10, 0, 1, 255));
+    }
+
+    // cargo test ipset::tests::test_v6_intersection_subset
+    #[test]
+    fn test_v6_intersection_subset() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0xff),
+        );
+        let b = make_v6_set(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x40),
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x80),
+        );
+        assert_eq!(a.intersection(&b), b);
+    }
+
+    // cargo test ipset::tests::test_v6_intersection_disjoint
+    #[test]
+    fn test_v6_intersection_disjoint() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0xff),
+        );
+        let b = make_v6_set(
+            Ipv6Addr::new(0x2001, 0xdb9, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0x2001, 0xdb9, 0, 0, 0, 0, 0, 0xff),
+        );
+        assert!(a.intersection(&b).is_empty());
+    }
+
+    // --- Complement ---
+
+    // cargo test ipset::tests::test_v4_complement_empty
+    #[test]
+    fn test_v4_complement_empty() {
+        // complement(∅) == full address space
+        let empty = IpSetBuilder::<Ipv4Addr>::new().build();
+        let c = empty.complement();
+        assert_eq!(c.len(), 1);
+        assert_eq!(c.ranges()[0].start(), Ipv4Addr::new(0, 0, 0, 0));
+        assert_eq!(c.ranges()[0].end(),   Ipv4Addr::new(255, 255, 255, 255));
+    }
+
+    // cargo test ipset::tests::test_v4_complement_full_space
+    #[test]
+    fn test_v4_complement_full_space() {
+        // complement(full) == ∅
+        let mut b = IpSetBuilder::<Ipv4Addr>::new();
+        b.add_range(IpRange::new(Ipv4Addr::new(0, 0, 0, 0), Ipv4Addr::new(255, 255, 255, 255)));
+        let full = b.build();
+        assert!(full.complement().is_empty());
+    }
+
+    // cargo test ipset::tests::test_v4_complement_middle_range
+    #[test]
+    fn test_v4_complement_middle_range() {
+        // complement([10.0.0.0..10.0.0.255]) == [0.0.0.0..9.255.255.255, 10.0.1.0..255.255.255.255]
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        let c = a.complement();
+        assert_eq!(c.len(), 2);
+        assert_eq!(c.ranges()[0].start(), Ipv4Addr::new(0, 0, 0, 0));
+        assert_eq!(c.ranges()[0].end(),   Ipv4Addr::new(9, 255, 255, 255));
+        assert_eq!(c.ranges()[1].start(), Ipv4Addr::new(10, 0, 1, 0));
+        assert_eq!(c.ranges()[1].end(),   Ipv4Addr::new(255, 255, 255, 255));
+    }
+
+    // cargo test ipset::tests::test_v4_complement_starts_at_zero
+    #[test]
+    fn test_v4_complement_starts_at_zero() {
+        // Set starts at 0 — no head gap
+        let a = make_v4_set(Ipv4Addr::new(0, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        let c = a.complement();
+        assert_eq!(c.len(), 1);
+        assert_eq!(c.ranges()[0].start(), Ipv4Addr::new(10, 0, 1, 0));
+        assert_eq!(c.ranges()[0].end(),   Ipv4Addr::new(255, 255, 255, 255));
+    }
+
+    // cargo test ipset::tests::test_v4_complement_ends_at_max
+    #[test]
+    fn test_v4_complement_ends_at_max() {
+        // Set ends at 255.255.255.255 — no tail gap
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(255, 255, 255, 255));
+        let c = a.complement();
+        assert_eq!(c.len(), 1);
+        assert_eq!(c.ranges()[0].start(), Ipv4Addr::new(0, 0, 0, 0));
+        assert_eq!(c.ranges()[0].end(),   Ipv4Addr::new(9, 255, 255, 255));
+    }
+
+    // cargo test ipset::tests::test_v4_complement_double
+    #[test]
+    fn test_v4_complement_double() {
+        // complement(complement(a)) == a
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        assert_eq!(a.complement().complement(), a);
+    }
+
+    // cargo test ipset::tests::test_v4_complement_multiple_ranges
+    #[test]
+    fn test_v4_complement_multiple_ranges() {
+        // Two stored ranges — complement fills head, interior gap, and tail.
+        // a: [10.0.0.0..10.0.0.255] and [192.168.0.0..192.168.0.255]
+        // complement: [0.0.0.0..9.255.255.255], [10.0.1.0..192.167.255.255], [192.168.1.0..255.255.255.255]
+        let mut ba = IpSetBuilder::<Ipv4Addr>::new();
+        ba.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0),   Ipv4Addr::new(10, 0, 0, 255)));
+        ba.add_range(IpRange::new(Ipv4Addr::new(192, 168, 0, 0), Ipv4Addr::new(192, 168, 0, 255)));
+        let a = ba.build();
+
+        let c = a.complement();
+        assert_eq!(c.len(), 3);
+        assert_eq!(c.ranges()[0].start(), Ipv4Addr::new(0, 0, 0, 0));
+        assert_eq!(c.ranges()[0].end(),   Ipv4Addr::new(9, 255, 255, 255));
+        assert_eq!(c.ranges()[1].start(), Ipv4Addr::new(10, 0, 1, 0));
+        assert_eq!(c.ranges()[1].end(),   Ipv4Addr::new(192, 167, 255, 255));
+        assert_eq!(c.ranges()[2].start(), Ipv4Addr::new(192, 168, 1, 0));
+        assert_eq!(c.ranges()[2].end(),   Ipv4Addr::new(255, 255, 255, 255));
+    }
+
+    // cargo test ipset::tests::test_v4_complement_union_is_full
+    #[test]
+    fn test_v4_complement_union_is_full() {
+        // a ∪ complement(a) == full address space
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        let c = a.complement();
+        let full = a.union(&c);
+        assert_eq!(full.len(), 1);
+        assert_eq!(full.ranges()[0].start(), Ipv4Addr::new(0, 0, 0, 0));
+        assert_eq!(full.ranges()[0].end(),   Ipv4Addr::new(255, 255, 255, 255));
+    }
+
+    // cargo test ipset::tests::test_v4_complement_intersection_is_empty
+    #[test]
+    fn test_v4_complement_intersection_is_empty() {
+        // a ∩ complement(a) == ∅
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        assert!(a.intersection(&a.complement()).is_empty());
+    }
+
+    // cargo test ipset::tests::test_v6_complement_empty
+    #[test]
+    fn test_v6_complement_empty() {
+        // complement(∅) == full IPv6 address space (single range)
+        let empty = IpSetBuilder::<Ipv6Addr>::new().build();
+        let c = empty.complement();
+        assert_eq!(c.len(), 1);
+        assert_eq!(c.ranges()[0].start(), Ipv6Addr::from(0u128));
+        assert_eq!(c.ranges()[0].end(),   Ipv6Addr::from(u128::MAX));
+    }
+
+    // cargo test ipset::tests::test_v6_complement_double
+    #[test]
+    fn test_v6_complement_double() {
+        // complement(complement(a)) == a for IPv6
+        let a = make_v6_set(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0xff),
+        );
+        assert_eq!(a.complement().complement(), a);
+    }
+
+    // cargo test ipset::tests::test_v6_complement_middle_range
+    #[test]
+    fn test_v6_complement_middle_range() {
+        // A mid-range produces exactly two complement ranges (head + tail)
+        let start = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x10);
+        let end   = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x20);
+        let a = make_v6_set(start, end);
+        let c = a.complement();
+        assert_eq!(c.len(), 2);
+        assert_eq!(c.ranges()[0].start(), Ipv6Addr::from(0u128));
+        assert_eq!(c.ranges()[0].end(),   Ipv6Addr::from(start.to_bits() - 1));
+        assert_eq!(c.ranges()[1].start(), Ipv6Addr::from(end.to_bits() + 1));
+        assert_eq!(c.ranges()[1].end(),   Ipv6Addr::from(u128::MAX));
     }
 }
