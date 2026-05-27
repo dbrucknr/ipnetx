@@ -58,6 +58,12 @@ impl<A: IpAddress> IpPrefix<A> {
         }
     }
 
+    /// Returns `true` if this prefix covers exactly one IP address
+    /// (i.e. `/32` for IPv4 or `/128` for IPv6).
+    pub fn is_single_ip(&self) -> bool {
+        self.mask == A::BITS
+    }
+
     // ── helpers ────────────────────────────────────────────────────────────
 
     /// Bit mask covering the network portion (top `mask` bits within the
@@ -299,5 +305,37 @@ mod tests {
         let masked = prefix.masked();
         assert_eq!(masked.ip(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
         assert_eq!(masked.mask(), 0);
+    }
+
+    // --- is_single_ip() ---
+
+    // cargo test prefix::tests::test_v4_is_single_ip_slash32
+    #[test]
+    fn test_v4_is_single_ip_slash32() {
+        let prefix = IpPrefix::new(Ipv4Addr::new(10, 0, 0, 1), 32).unwrap();
+        assert!(prefix.is_single_ip());
+    }
+
+    // cargo test prefix::tests::test_v4_is_single_ip_not_slash32
+    #[test]
+    fn test_v4_is_single_ip_not_slash32() {
+        let prefix = IpPrefix::new(Ipv4Addr::new(192, 168, 1, 0), 24).unwrap();
+        assert!(!prefix.is_single_ip());
+    }
+
+    // cargo test prefix::tests::test_v6_is_single_ip_slash128
+    #[test]
+    fn test_v6_is_single_ip_slash128() {
+        let prefix =
+            IpPrefix::new(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1), 128).unwrap();
+        assert!(prefix.is_single_ip());
+    }
+
+    // cargo test prefix::tests::test_v6_is_single_ip_not_slash128
+    #[test]
+    fn test_v6_is_single_ip_not_slash128() {
+        let prefix =
+            IpPrefix::new(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0), 64).unwrap();
+        assert!(!prefix.is_single_ip());
     }
 }
