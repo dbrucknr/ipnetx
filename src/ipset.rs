@@ -121,7 +121,64 @@ impl<A: IpAddress> IpSetBuilder<A> {
         let merged = normalize(self.ranges);
         IpSet::new(merged)
     }
+}
 
+impl<A: IpAddress> FromIterator<IpRange<A>> for IpSetBuilder<A> {
+    /// Constructs an [`IpSetBuilder`] from an iterator of [`IpRange`] values.
+    ///
+    /// This allows collecting a set of ranges directly into a builder using
+    /// iterator adapters.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::net::Ipv4Addr;
+    /// use ipnetx::ipset::IpSetBuilder;
+    /// use ipnetx::range::IpRange;
+    ///
+    /// let ranges = vec![
+    ///     IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255)),
+    ///     IpRange::new(Ipv4Addr::new(192, 168, 1, 0), Ipv4Addr::new(192, 168, 1, 255)),
+    /// ];
+    /// let builder: IpSetBuilder<Ipv4Addr> = ranges.into_iter().collect();
+    /// let set = builder.build();
+    /// assert_eq!(set.len(), 2);
+    /// ```
+    fn from_iter<I: IntoIterator<Item = IpRange<A>>>(iter: I) -> Self {
+        let mut builder = IpSetBuilder::new();
+        for range in iter {
+            builder.add_range(range);
+        }
+        builder
+    }
+}
+
+impl<A: IpAddress> FromIterator<IpPrefix<A>> for IpSetBuilder<A> {
+    /// Constructs an [`IpSetBuilder`] from an iterator of [`IpPrefix`] values.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::net::Ipv4Addr;
+    /// use ipnetx::ipset::IpSetBuilder;
+    /// use ipnetx::prefix::IpPrefix;
+    ///
+    /// let prefixes = vec![
+    ///     IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap(),
+    ///     IpPrefix::new(Ipv4Addr::new(192, 168, 0, 0), 16).unwrap(),
+    /// ];
+    /// let builder: IpSetBuilder<Ipv4Addr> = prefixes.into_iter().collect();
+    /// let set = builder.build();
+    /// assert!(set.contains_ip(Ipv4Addr::new(10, 1, 2, 3)));
+    /// assert!(set.contains_ip(Ipv4Addr::new(192, 168, 1, 100)));
+    /// ```
+    fn from_iter<I: IntoIterator<Item = IpPrefix<A>>>(iter: I) -> Self {
+        let mut builder = IpSetBuilder::new();
+        for prefix in iter {
+            builder.add_prefix(prefix);
+        }
+        builder
+    }
 }
 
 /// An immutable, normalized set of IP addresses.
@@ -257,10 +314,95 @@ impl<A: IpAddress> IpSet<A> {
         false
     }
 
+    /// Returns the total number of IP addresses in the set.
+    ///
+    /// Each stored range contributes `end - start + 1` addresses.  The return
+    /// type is `u128` so that an IPv6 set covering the entire address space
+    /// (2¹²⁸ addresses) can be represented exactly.
+    ///
+    /// See [`len`](IpSet::len) to get the number of stored *ranges* instead.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::net::Ipv4Addr;
+    /// use ipnetx::ipset::IpSetBuilder;
+    /// use ipnetx::range::IpRange;
+    ///
+    /// let mut b = IpSetBuilder::<Ipv4Addr>::new();
+    /// b.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 9)));
+    /// b.add_range(IpRange::new(Ipv4Addr::new(192, 168, 1, 0), Ipv4Addr::new(192, 168, 1, 4)));
+    /// let set = b.build();
+    ///
+    /// assert_eq!(set.count(), 15); // 10 + 5
+    /// ```
+    #[must_use]
+    pub fn count(&self) -> u128 {
+        self.ranges
+            .iter()
+            .map(|r| r.end().to_u128() - r.start().to_u128() + 1)
+            .sum()
+    }
+
+    /// Returns `true` if every address in `self` is also contained in `other`.
+    ///
+    /// An empty set is a subset of every set (including another empty set).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::net::Ipv4Addr;
+    /// use ipnetx::ipset::IpSetBuilder;
+    /// use ipnetx::range::IpRange;
+    ///
+    /// let mut ba = IpSetBuilder::<Ipv4Addr>::new();
+    /// ba.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 50), Ipv4Addr::new(10, 0, 0, 100)));
+    /// let a = ba.build();
+    ///
+    /// let mut bb = IpSetBuilder::<Ipv4Addr>::new();
+    /// bb.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255)));
+    /// let b = bb.build();
+    ///
+    /// assert!(a.is_subset_of(&b));   // a ⊆ b
+    /// assert!(!b.is_subset_of(&a));  // b ⊄ a
+    /// ```
+    #[must_use]
+    pub fn is_subset_of(&self, other: &IpSet<A>) -> bool {
+        self.difference(other).is_empty()
+    }
+
+    /// Returns `true` if every address in `other` is also contained in `self`.
+    ///
+    /// Equivalent to `other.is_subset_of(self)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::net::Ipv4Addr;
+    /// use ipnetx::ipset::IpSetBuilder;
+    /// use ipnetx::range::IpRange;
+    ///
+    /// let mut ba = IpSetBuilder::<Ipv4Addr>::new();
+    /// ba.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255)));
+    /// let a = ba.build();
+    ///
+    /// let mut bb = IpSetBuilder::<Ipv4Addr>::new();
+    /// bb.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 50), Ipv4Addr::new(10, 0, 0, 100)));
+    /// let b = bb.build();
+    ///
+    /// assert!(a.is_superset_of(&b));   // a ⊇ b
+    /// assert!(!b.is_superset_of(&a));  // b ⊉ a
+    /// ```
+    #[must_use]
+    pub fn is_superset_of(&self, other: &IpSet<A>) -> bool {
+        other.is_subset_of(self)
+    }
+
     /// Returns the number of distinct ranges in this set.
     ///
     /// This is the count of *ranges*, not individual IP addresses — a single
-    /// range can span billions of addresses.
+    /// range can span billions of addresses.  See [`count`](IpSet::count) for
+    /// the total address cardinality.
     #[must_use]
     pub fn len(&self) -> usize {
         self.ranges.len()
@@ -1971,5 +2113,167 @@ mod tests {
         assert_eq!(c.ranges()[0].end(),   Ipv6Addr::from(start.to_bits() - 1));
         assert_eq!(c.ranges()[1].start(), Ipv6Addr::from(end.to_bits() + 1));
         assert_eq!(c.ranges()[1].end(),   Ipv6Addr::from(u128::MAX));
+    }
+
+    // --- Count ---
+
+    // cargo test ipset::tests::test_v4_count_single_range
+    #[test]
+    fn test_v4_count_single_range() {
+        // 10.0.0.0..10.0.0.9 is 10 addresses
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 9));
+        assert_eq!(a.count(), 10);
+    }
+
+    // cargo test ipset::tests::test_v4_count_empty
+    #[test]
+    fn test_v4_count_empty() {
+        let empty = IpSetBuilder::<Ipv4Addr>::new().build();
+        assert_eq!(empty.count(), 0);
+    }
+
+    // cargo test ipset::tests::test_v4_count_multiple_ranges
+    #[test]
+    fn test_v4_count_multiple_ranges() {
+        // 10 + 5 = 15
+        let mut b = IpSetBuilder::<Ipv4Addr>::new();
+        b.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 9)));
+        b.add_range(IpRange::new(Ipv4Addr::new(192, 168, 1, 0), Ipv4Addr::new(192, 168, 1, 4)));
+        assert_eq!(b.build().count(), 15);
+    }
+
+    // cargo test ipset::tests::test_v4_count_single_ip
+    #[test]
+    fn test_v4_count_single_ip() {
+        let mut b = IpSetBuilder::<Ipv4Addr>::new();
+        b.add_ip(Ipv4Addr::new(1, 2, 3, 4));
+        assert_eq!(b.build().count(), 1);
+    }
+
+    // cargo test ipset::tests::test_v4_count_full_space
+    #[test]
+    fn test_v4_count_full_space() {
+        let mut b = IpSetBuilder::<Ipv4Addr>::new();
+        b.add_range(IpRange::new(Ipv4Addr::new(0, 0, 0, 0), Ipv4Addr::new(255, 255, 255, 255)));
+        assert_eq!(b.build().count(), u32::MAX as u128 + 1);
+    }
+
+    // cargo test ipset::tests::test_v6_count_single_ip
+    #[test]
+    fn test_v6_count_single_ip() {
+        let mut b = IpSetBuilder::<Ipv6Addr>::new();
+        b.add_ip(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+        assert_eq!(b.build().count(), 1);
+    }
+
+    // --- is_subset_of / is_superset_of ---
+
+    // cargo test ipset::tests::test_v4_subset_proper
+    #[test]
+    fn test_v4_subset_proper() {
+        // a ⊂ b
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 50), Ipv4Addr::new(10, 0, 0, 100));
+        let b = make_v4_set(Ipv4Addr::new(10, 0, 0, 0),  Ipv4Addr::new(10, 0, 0, 255));
+        assert!(a.is_subset_of(&b));
+        assert!(!b.is_subset_of(&a));
+    }
+
+    // cargo test ipset::tests::test_v4_superset_proper
+    #[test]
+    fn test_v4_superset_proper() {
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0),  Ipv4Addr::new(10, 0, 0, 255));
+        let b = make_v4_set(Ipv4Addr::new(10, 0, 0, 50), Ipv4Addr::new(10, 0, 0, 100));
+        assert!(a.is_superset_of(&b));
+        assert!(!b.is_superset_of(&a));
+    }
+
+    // cargo test ipset::tests::test_v4_subset_equal
+    #[test]
+    fn test_v4_subset_equal() {
+        // a ⊆ a
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        assert!(a.is_subset_of(&a));
+        assert!(a.is_superset_of(&a));
+    }
+
+    // cargo test ipset::tests::test_v4_subset_disjoint
+    #[test]
+    fn test_v4_subset_disjoint() {
+        // Disjoint sets — neither is a subset of the other
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0),    Ipv4Addr::new(10, 0, 0, 255));
+        let b = make_v4_set(Ipv4Addr::new(192, 168, 1, 0),  Ipv4Addr::new(192, 168, 1, 255));
+        assert!(!a.is_subset_of(&b));
+        assert!(!b.is_subset_of(&a));
+    }
+
+    // cargo test ipset::tests::test_v4_empty_subset_of_any
+    #[test]
+    fn test_v4_empty_subset_of_any() {
+        // ∅ ⊆ everything
+        let empty = IpSetBuilder::<Ipv4Addr>::new().build();
+        let a = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        assert!(empty.is_subset_of(&a));
+        assert!(empty.is_subset_of(&empty));
+        assert!(a.is_superset_of(&empty));
+    }
+
+    // --- FromIterator ---
+
+    // cargo test ipset::tests::test_v4_from_iter_ranges
+    #[test]
+    fn test_v4_from_iter_ranges() {
+        let ranges = vec![
+            IpRange::new(Ipv4Addr::new(10, 0, 0, 0),    Ipv4Addr::new(10, 0, 0, 255)),
+            IpRange::new(Ipv4Addr::new(192, 168, 1, 0), Ipv4Addr::new(192, 168, 1, 255)),
+        ];
+        let builder: IpSetBuilder<Ipv4Addr> = ranges.into_iter().collect();
+        let set = builder.build();
+        assert_eq!(set.len(), 2);
+        assert!(set.contains_ip(Ipv4Addr::new(10, 0, 0, 1)));
+        assert!(set.contains_ip(Ipv4Addr::new(192, 168, 1, 1)));
+    }
+
+    // cargo test ipset::tests::test_v4_from_iter_prefixes
+    #[test]
+    fn test_v4_from_iter_prefixes() {
+        let prefixes = vec![
+            IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap(),
+            IpPrefix::new(Ipv4Addr::new(192, 168, 0, 0), 16).unwrap(),
+        ];
+        let builder: IpSetBuilder<Ipv4Addr> = prefixes.into_iter().collect();
+        let set = builder.build();
+        assert!(set.contains_ip(Ipv4Addr::new(10, 1, 2, 3)));
+        assert!(set.contains_ip(Ipv4Addr::new(192, 168, 1, 100)));
+        assert!(!set.contains_ip(Ipv4Addr::new(172, 16, 0, 1)));
+    }
+
+    // cargo test ipset::tests::test_v4_from_iter_ranges_merges_adjacent
+    #[test]
+    fn test_v4_from_iter_ranges_merges_adjacent() {
+        // Adjacent ranges should be merged during build
+        let ranges = vec![
+            IpRange::new(Ipv4Addr::new(10, 0, 0, 0),   Ipv4Addr::new(10, 0, 0, 127)),
+            IpRange::new(Ipv4Addr::new(10, 0, 0, 128), Ipv4Addr::new(10, 0, 0, 255)),
+        ];
+        let set: IpSetBuilder<Ipv4Addr> = ranges.into_iter().collect();
+        let set = set.build();
+        assert_eq!(set.len(), 1);
+        assert_eq!(set.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 0));
+        assert_eq!(set.ranges()[0].end(),   Ipv4Addr::new(10, 0, 0, 255));
+    }
+
+    // cargo test ipset::tests::test_v6_from_iter_ranges
+    #[test]
+    fn test_v6_from_iter_ranges() {
+        let ranges = vec![
+            IpRange::new(
+                Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+                Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0xff),
+            ),
+        ];
+        let builder: IpSetBuilder<Ipv6Addr> = ranges.into_iter().collect();
+        let set = builder.build();
+        assert_eq!(set.len(), 1);
+        assert!(set.contains_ip(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x42)));
     }
 }

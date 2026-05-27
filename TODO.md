@@ -78,26 +78,20 @@ route analysis, threat intelligence ingestion, and network auditing.
 
 | Operation | Status | Example use case |
 |---|---|---|
-| `a.union(&b) -> IpSet` | ❌ | Merge two ACLs into one |
-| `a.intersection(&b) -> IpSet` | ❌ | "Which IPs are in both our network and this threat feed?" |
-| `a.difference(&b) -> IpSet` | ❌ | "Everything in the allow-list that isn't also in the block-list" |
-| `a.complement() -> IpSet` | ❌ | "Every IP *not* covered by this set" — deny-by-default rules |
-
-> **Implementation note:** union is a new `IpSetBuilder` fed both sets' ranges; intersection and
-> difference are O(m + n) sorted two-pointer merges; complement is the gaps between stored ranges
-> plus the head and tail of the address space.
-
-Don't forget to update README with good examples of how to use each method.
+| `a.union(&b) -> IpSet` | ✅ | Merge two ACLs into one |
+| `a.intersection(&b) -> IpSet` | ✅ | "Which IPs are in both our network and this threat feed?" |
+| `a.difference(&b) -> IpSet` | ✅ | "Everything in the allow-list that isn't also in the block-list" |
+| `a.complement() -> IpSet` | ✅ | "Every IP *not* covered by this set" — deny-by-default rules |
 
 ### Tier 2 — useful additions
 
 | Feature | Status | Notes |
 |---|---|---|
-| `IpSet::count() -> u128` | ❌ | Total address cardinality, not just number of stored ranges |
-| `IpSet::is_subset_of(&other)` | ❌ | Expressible via intersection but worth a named method |
-| `IpSet::is_superset_of(&other)` | ❌ | Symmetric counterpart to `is_subset_of` |
-| `FromIterator<IpPrefix<A>>` for `IpSetBuilder` | ❌ | `prefixes.into_iter().collect::<IpSet<_>>()` |
-| `FromIterator<IpRange<A>>` for `IpSetBuilder` | ❌ | Same ergonomics for ranges |
+| `IpSet::count() -> u128` | ✅ | Total address cardinality, not just number of stored ranges |
+| `IpSet::is_subset_of(&other)` | ✅ | Expressible via intersection but worth a named method |
+| `IpSet::is_superset_of(&other)` | ✅ | Symmetric counterpart to `is_subset_of` |
+| `FromIterator<IpPrefix<A>>` for `IpSetBuilder` | ✅ | `prefixes.into_iter().collect::<IpSetBuilder<_>>()` |
+| `FromIterator<IpRange<A>>` for `IpSetBuilder` | ✅ | Same ergonomics for ranges |
 
 ### Tier 3 — table stakes
 
