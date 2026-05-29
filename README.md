@@ -732,6 +732,48 @@ lands at `target/criterion/report/index.html`. Benchmark source is in
 
 ---
 
+## Ecosystem
+
+`ipnetx` reasons about *regions* of IP address space as mathematical sets —
+union, intersection, difference, complement. Once you have a set, a natural
+next question is: **given a single IP address, which prefix in this set matches
+it most specifically?**
+
+That is the job of [`routemap`](https://crates.io/crates/routemap) — an
+in-memory longest-prefix-match table that uses `IpPrefix<A>` from `ipnetx` as
+its key type. The two crates are designed to compose: use `ipnetx` to aggregate
+and normalise your prefix data, then load the result into a `RouteMap` for
+per-address classification at speed.
+
+```rust,ignore
+use std::net::Ipv4Addr;
+use ipnetx::ipset::IpSetBuilder;
+use ipnetx::prefix::IpPrefix;
+use routemap::RouteMap;
+
+// Use ipnetx to aggregate raw prefixes into a minimal covering set.
+// The /16 is redundant — ipnetx deduplicates it during build().
+let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+builder.add_prefix("10.0.0.0/8".parse::<IpPrefix<Ipv4Addr>>().unwrap());
+builder.add_prefix("10.20.0.0/16".parse::<IpPrefix<Ipv4Addr>>().unwrap());
+let set = builder.build();
+assert_eq!(set.len(), 1); // collapsed to a single 10/8
+
+// Load the aggregated prefixes into routemap for LPM classification.
+let table: RouteMap<Ipv4Addr, &str> = set
+    .prefixes()
+    .into_iter()
+    .map(|p| (p, "datacenter"))
+    .collect();
+
+assert_eq!(
+    table.longest_match("10.20.5.1".parse().unwrap()),
+    Some(&"datacenter")
+);
+```
+
+---
+
 ## API reference
 
 Full documentation is available on [docs.rs/ipnetx](https://docs.rs/ipnetx).

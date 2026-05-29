@@ -2,6 +2,7 @@
 name = "ipnetx"
 version = "0.2.1"
 edition = "2024"
+rust-version = "1.85"
 description = "ipnetx is the crate for set operations on IP address space — union, intersection, difference, and complement over arbitrary collections of ranges and CIDR prefixes, for both IPv4 and IPv6."
 license = "MIT"
 repository = "https://github.com/dbrucknr/ipnetx"

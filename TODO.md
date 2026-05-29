@@ -101,6 +101,24 @@ route analysis, threat intelligence ingestion, and network auditing.
 
 ---
 
+## Known deficits and improvements
+
+### Priority 1 — correctness debt
+
+- **Fix `difference()` to O(m+n)** — current implementation calls `subtract_range` (O(m)) once per range in `other`, making it O(m×n) overall. A proper two-pointer walk would match `intersection`. Not visible in current benchmarks due to favorable test data structure, but will surface on large real-world inputs (e.g. a routing table diffed against a block list).
+
+### Priority 2 — ecosystem reach
+
+- **Serde support** — gate behind a `serde` feature flag. Required by anyone loading sets from JSON/TOML config, serializing to Redis, or deserializing threat intel from an API. Most commonly requested feature for networking crates. (Also tracked in Tier 3 above.)
+
+### Priority 3 — ergonomics
+
+- **`IntoIterator` for `&IpSet`** — users cannot currently do `for range in &set { ... }` or chain `IpSet` into iterator adapters. `impl IntoIterator for &IpSet<A>` is a small addition that makes the type feel complete.
+- **`PartialOrd` / `Ord` on `IpRange` and `IpPrefix`** — these types have a natural ordering by start address but the traits are not implemented. Needed to sort a `Vec<IpRange>` without a custom comparator or use them in a `BTreeSet`.
+- **Builder introspection** — `IpSetBuilder` is append-only until `build()` is called. A `len()` or `is_empty()` on the builder would occasionally be useful without requiring a full `build()`.
+
+---
+
 ## Before publishing to crates.io
 
 - Add `description`, `license`, `repository`, `keywords`, `categories`, `readme` to `Cargo.toml` ✅
