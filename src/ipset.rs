@@ -536,15 +536,63 @@ impl<A: IpAddress> IpSet<A> {
     /// ```
     #[must_use]
     pub fn difference(&self, other: &IpSet<A>) -> IpSet<A> {
-        // Both sets are already normalized (sorted, non-overlapping).
-        // subtract_range only splits and drops ranges — it never reorders them —
-        // so iterating other's ranges and subtracting each one preserves the
-        // IpSet invariant without a second normalize pass.
-        let mut ranges = self.ranges.clone();
-        for remove in &other.ranges {
-            ranges = subtract_range(ranges, *remove);
+        // Two-pointer walk — O(m + n).
+        // Both sets are sorted and non-overlapping. We emit the portions of
+        // self that are not covered by other.
+        //
+        // `cur` is the next address in the current self-range that we haven't
+        // decided on yet. `j` advances through other.ranges and never resets.
+        //
+        // Overflow notes:
+        //   `b_start - 1` is safe: we only compute it when `b_start > cur >= 0`,
+        //     so b_start >= 1.
+        //   `b_end + 1` is safe: we only compute it when `b_end < a_end`; since
+        //     a_end is a valid address (≤ u128::MAX), b_end ≤ u128::MAX − 1.
+        let mut result = Vec::new();
+        let mut j = 0usize;
+
+        for a in &self.ranges {
+            let mut cur = a.start().to_u128();
+            let a_end = a.end().to_u128();
+            let mut consumed = false;
+
+            // Skip removals that end before `cur` — they cannot affect this range.
+            while j < other.ranges.len() && other.ranges[j].end().to_u128() < cur {
+                j += 1;
+            }
+
+            while j < other.ranges.len() {
+                let b_start = other.ranges[j].start().to_u128();
+                let b_end = other.ranges[j].end().to_u128();
+
+                if b_start > a_end {
+                    // This and all later removals are past the current a-range.
+                    break;
+                }
+
+                // Emit the gap between `cur` and the start of this removal.
+                if b_start > cur {
+                    result.push(IpRange::new(A::from_u128(cur), A::from_u128(b_start - 1)));
+                }
+
+                if b_end >= a_end {
+                    // Removal reaches or passes the end of this a-range; no tail.
+                    // Keep j here — b may still overlap the next a-range.
+                    consumed = true;
+                    break;
+                }
+
+                // Removal ends inside this a-range; advance past it and try the next.
+                cur = b_end + 1;
+                j += 1;
+            }
+
+            if !consumed {
+                result.push(IpRange::new(A::from_u128(cur), A::from_u128(a_end)));
+            }
         }
-        IpSet::new(ranges)
+
+        IpSet::new(result)
     }
 
     /// Returns a new set containing every address that is in both `self` and

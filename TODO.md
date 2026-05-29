@@ -105,7 +105,7 @@ route analysis, threat intelligence ingestion, and network auditing.
 
 ### Priority 1 — correctness debt
 
-- **Fix `difference()` to O(m+n)** — current implementation calls `subtract_range` (O(m)) once per range in `other`, making it O(m×n) overall. A proper two-pointer walk would match `intersection`. Not visible in current benchmarks due to favorable test data structure, but will surface on large real-world inputs (e.g. a routing table diffed against a block list).
+- **Fix `difference()` to O(m+n)** ✅ — replaced the O(m×n) `subtract_range` loop with a two-pointer walk matching the approach used in `intersection()`.
 
 ### Priority 2 — ecosystem reach
 
