@@ -3,7 +3,7 @@
 - Run: `cargo publish --dry-run`
 - Run `cargo test` to run the test suite.
 - Run `cargo llvm-cov` to generate a test coverage report.
-- `cargo clippy -- -D` to run clippy with all warnings enabled. Fix anything it finds.
+- `cargo clippy -- -D warnings` to run clippy with all warnings enabled. Fix anything it finds.
 - Try and reflect on documentation and the `README.md`. Does anything need to be updated?
   - Specifically a version reference, or added / modified / removed functionality.
   - Try to be as descriptive as possible. Pretend that prospective users of the library are reading this from the standpoint of a student who wants to learn how to use it.
