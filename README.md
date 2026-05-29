@@ -438,6 +438,40 @@ assert!(set.contains_ip(Ipv4Addr::new(10, 0, 0, 101)));  // still present
 assert_eq!(set.len(), 2); // split into [0..99] and [101..255]
 ```
 
+### Combining and subtracting whole sets while building
+
+`add_ipset` and `remove_ipset` let you merge or subtract an entire `IpSet` into
+a builder in one call. This is useful when you have pre-built sets you want to
+compose — for example, starting from a known set of prefixes and then carving
+out reserved blocks.
+
+```rust
+use std::net::Ipv4Addr;
+use ipnetx::prefix::IpPrefix;
+use ipnetx::ipset::IpSetBuilder;
+
+// Build the RFC 1918 private address space.
+let mut b = IpSetBuilder::<Ipv4Addr>::new();
+b.add_prefix(IpPrefix::new(Ipv4Addr::new(10,  0,  0, 0),  8).unwrap());
+b.add_prefix(IpPrefix::new(Ipv4Addr::new(172, 16, 0, 0), 12).unwrap());
+b.add_prefix(IpPrefix::new(Ipv4Addr::new(192, 168, 0, 0), 16).unwrap());
+let private = b.build();
+
+// Reserve a /24 for infrastructure — build it as its own set.
+let mut rb = IpSetBuilder::<Ipv4Addr>::new();
+rb.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 24).unwrap());
+let reserved = rb.build();
+
+// Compose: start from all private space, then carve out the reserved block.
+let mut pool = IpSetBuilder::<Ipv4Addr>::new();
+pool.add_ipset(&private);     // absorbs all three RFC 1918 ranges
+pool.remove_ipset(&reserved); // punches out 10.0.0.0/24
+
+let usable = pool.build();
+assert!(!usable.contains_ip(Ipv4Addr::new(10, 0, 0, 1)));  // reserved
+assert!(usable.contains_ip(Ipv4Addr::new(10, 0, 1, 1)));   // still usable
+```
+
 ### Membership queries
 
 ```rust
@@ -506,6 +540,36 @@ for range in set.ranges() {
 for prefix in set.prefixes() {
     println!("{}/{}", prefix.ip(), prefix.mask());
 }
+```
+
+### Iterating over a set
+
+`IpSet` implements `IntoIterator`, so you can use it directly in `for` loops
+and chain it with standard iterator adapters — no need to call `.ranges()` first.
+
+```rust
+use std::net::Ipv4Addr;
+use ipnetx::range::IpRange;
+use ipnetx::ipset::IpSetBuilder;
+
+let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+builder.add_range(IpRange::new(Ipv4Addr::new(10,  0, 0, 0), Ipv4Addr::new(10,  0, 0, 255)));
+builder.add_range(IpRange::new(Ipv4Addr::new(192, 168, 1, 0), Ipv4Addr::new(192, 168, 1, 255)));
+let set = builder.build();
+
+// Borrow — yields &IpRange<A>, set is still usable afterwards.
+for range in &set {
+    println!("{} – {}", range.start(), range.end());
+}
+
+// Iterator adapters work directly on &set.
+let starts: Vec<Ipv4Addr> = (&set).into_iter().map(|r| r.start()).collect();
+assert_eq!(starts[0], Ipv4Addr::new(10, 0, 0, 0));
+assert_eq!(starts[1], Ipv4Addr::new(192, 168, 1, 0));
+
+// Consuming — moves the set, yields IpRange<A> by value.
+let ranges: Vec<IpRange<Ipv4Addr>> = set.into_iter().collect();
+assert_eq!(ranges.len(), 2);
 ```
 
 ### Overlapping inputs are merged automatically
