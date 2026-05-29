@@ -18,7 +18,7 @@
   - `open target/llvm-cov/html/index.html`
 - Or you can generate a terminal report
   - `cargo llvm-cov`
-  - To see missing lines: `cargo llvm-cov --show-missing`
+  - To see missing lines: `cargo llvm-cov --show-missing-lines`
 - `cargo bench`
 
 # Helpful References

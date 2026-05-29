@@ -1,3 +1,4 @@
+#![doc = include_str!("../README.md")]
 //! IP address range, prefix, and set operations for IPv4 and IPv6.
 //!
 //! `ipnetx` provides three core types built on a single generic
