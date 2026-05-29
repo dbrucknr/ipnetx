@@ -113,7 +113,7 @@ route analysis, threat intelligence ingestion, and network auditing.
 
 ### Priority 3 — ergonomics
 
-- **`IntoIterator` for `&IpSet`** — users cannot currently do `for range in &set { ... }` or chain `IpSet` into iterator adapters. `impl IntoIterator for &IpSet<A>` is a small addition that makes the type feel complete.
+- **`IntoIterator` for `&IpSet` and `IpSet`** ✅ — `for range in &set { ... }` and consuming iteration both work; full iterator adapter chain available.
 - **`PartialOrd` / `Ord` on `IpRange` and `IpPrefix`** — these types have a natural ordering by start address but the traits are not implemented. Needed to sort a `Vec<IpRange>` without a custom comparator or use them in a `BTreeSet`.
 - **Builder introspection** — `IpSetBuilder` is append-only until `build()` is called. A `len()` or `is_empty()` on the builder would occasionally be useful without requiring a full `build()`.
 

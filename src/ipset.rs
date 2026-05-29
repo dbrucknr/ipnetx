@@ -727,6 +727,24 @@ impl<A: IpAddress> IpSet<A> {
     }
 }
 
+impl<'a, A: IpAddress> IntoIterator for &'a IpSet<A> {
+    type Item = &'a IpRange<A>;
+    type IntoIter = std::slice::Iter<'a, IpRange<A>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.ranges.iter()
+    }
+}
+
+impl<A: IpAddress> IntoIterator for IpSet<A> {
+    type Item = IpRange<A>;
+    type IntoIter = std::vec::IntoIter<IpRange<A>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.ranges.into_iter()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2448,6 +2466,84 @@ mod tests {
         let set = builder.build();
         assert_eq!(set.len(), 1);
         assert!(set.contains_ip(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x42)));
+    }
+
+    // --- IntoIterator ---
+
+    // cargo test ipset::tests::test_v4_into_iter_ref_yields_ranges
+    #[test]
+    fn test_v4_into_iter_ref_yields_ranges() {
+        let set = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        let collected: Vec<_> = (&set).into_iter().collect();
+        assert_eq!(collected.len(), 1);
+        assert_eq!(*collected[0], IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255)));
+    }
+
+    // cargo test ipset::tests::test_v4_for_loop_ref
+    #[test]
+    fn test_v4_for_loop_ref() {
+        let set = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        let mut count = 0;
+        for _range in &set {
+            count += 1;
+        }
+        assert_eq!(count, 1);
+    }
+
+    // cargo test ipset::tests::test_v4_into_iter_consuming_yields_ranges
+    #[test]
+    fn test_v4_into_iter_consuming_yields_ranges() {
+        let set = make_v4_set(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255));
+        let collected: Vec<IpRange<Ipv4Addr>> = set.into_iter().collect();
+        assert_eq!(collected.len(), 1);
+        assert_eq!(collected[0], IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 255)));
+    }
+
+    // cargo test ipset::tests::test_v4_into_iter_empty
+    #[test]
+    fn test_v4_into_iter_empty() {
+        let set = IpSetBuilder::<Ipv4Addr>::new().build();
+        assert_eq!((&set).into_iter().count(), 0);
+        assert_eq!(set.into_iter().count(), 0);
+    }
+
+    // cargo test ipset::tests::test_v4_into_iter_multi_range
+    #[test]
+    fn test_v4_into_iter_multi_range() {
+        let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+        builder.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 10)));
+        builder.add_range(IpRange::new(Ipv4Addr::new(192, 168, 1, 0), Ipv4Addr::new(192, 168, 1, 10)));
+        let set = builder.build();
+        let starts: Vec<Ipv4Addr> = (&set).into_iter().map(|r| r.start()).collect();
+        assert_eq!(starts, vec![Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(192, 168, 1, 0)]);
+    }
+
+    // cargo test ipset::tests::test_v4_iter_adapter_chain
+    #[test]
+    fn test_v4_iter_adapter_chain() {
+        // Verifies that &IpSet chains with standard iterator adapters.
+        let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+        builder.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 10)));
+        builder.add_range(IpRange::new(Ipv4Addr::new(10, 0, 1, 0), Ipv4Addr::new(10, 0, 1, 5)));
+        builder.add_range(IpRange::new(Ipv4Addr::new(192, 168, 1, 0), Ipv4Addr::new(192, 168, 1, 255)));
+        let set = builder.build();
+        let count = (&set).into_iter().filter(|r| r.start().octets()[0] == 10).count();
+        assert_eq!(count, 2);
+    }
+
+    // cargo test ipset::tests::test_v6_into_iter_ref
+    #[test]
+    fn test_v6_into_iter_ref() {
+        let range = IpRange::new(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0xff),
+        );
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(range);
+        let set = builder.build();
+        let collected: Vec<_> = (&set).into_iter().collect();
+        assert_eq!(collected.len(), 1);
+        assert_eq!(*collected[0], range);
     }
 
     // --- add_ipset / remove_ipset ---
