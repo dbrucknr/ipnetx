@@ -117,6 +117,11 @@ route analysis, threat intelligence ingestion, and network auditing.
 - **`PartialOrd` / `Ord` on `IpRange` and `IpPrefix`** — these types have a natural ordering by start address but the traits are not implemented. Needed to sort a `Vec<IpRange>` without a custom comparator or use them in a `BTreeSet`.
 - **Builder introspection** — `IpSetBuilder` is append-only until `build()` is called. A `len()` or `is_empty()` on the builder would occasionally be useful without requiring a full `build()`.
 
+### Priority 4 - invariants + correctness
+
+- **proptests** — Automated property testing for correctness and invariants.
+- **cargo fuzz** — Fuzz testing for security and edge cases.
+
 ---
 
 ## Before publishing to crates.io
