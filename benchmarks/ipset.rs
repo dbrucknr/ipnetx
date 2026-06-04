@@ -122,8 +122,7 @@ fn bench_intersection(c: &mut Criterion) {
     group.finish();
 }
 
-/// `difference` — subtract each range in b from a; O(m × n) worst-case but
-/// O(m + n) for sorted, non-overlapping sets like these.
+/// `difference` — two-pointer walk; O(m + n).
 fn bench_difference(c: &mut Criterion) {
     let mut group = c.benchmark_group("difference");
     for &size in &[100u32, 1_000, 10_000] {
@@ -160,12 +159,53 @@ fn bench_count(c: &mut Criterion) {
     group.finish();
 }
 
+/// `IpSetBuilder::build` with removals — O((n + k) log(n + k)).
+///
+/// Each run adds `size` ranges in reverse order (forcing real sort work) and
+/// removes `size / 2` ranges covering the upper half of the add space.
+/// Demonstrates the lazy-removal path: all `remove_range` calls are O(1) and
+/// the subtraction is resolved in one pass during `build()`.
+fn bench_build_with_removals(c: &mut Criterion) {
+    let mut group = c.benchmark_group("build_with_removals");
+    for &size in &[100u32, 1_000, 10_000] {
+        let raw_adds: Vec<IpRange<Ipv4Addr>> = (0..size)
+            .rev()
+            .map(|i| {
+                let b2 = ((i / 256) % 256) as u8;
+                let b3 = (i % 256) as u8;
+                IpRange::new(Ipv4Addr::new(10, b2, b3, 0), Ipv4Addr::new(10, b2, b3, 255))
+            })
+            .collect();
+        let raw_removes: Vec<IpRange<Ipv4Addr>> = (size / 2..size)
+            .map(|i| {
+                let b2 = ((i / 256) % 256) as u8;
+                let b3 = (i % 256) as u8;
+                IpRange::new(Ipv4Addr::new(10, b2, b3, 0), Ipv4Addr::new(10, b2, b3, 255))
+            })
+            .collect();
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
+            b.iter(|| {
+                let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+                for &range in &raw_adds {
+                    builder.add_range(range);
+                }
+                for &range in &raw_removes {
+                    builder.remove_range(range);
+                }
+                black_box(builder.build())
+            });
+        });
+    }
+    group.finish();
+}
+
 // ---------------------------------------------------------------------------
 
 criterion_group!(
     benches,
     bench_contains_ip,
     bench_build,
+    bench_build_with_removals,
     bench_union,
     bench_intersection,
     bench_difference,

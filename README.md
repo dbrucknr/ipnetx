@@ -2,10 +2,13 @@
 
 IP address range, prefix, and set operations for IPv4 and IPv6.
 
+<!-- Crates.io Version -->
 [![Crates.io](https://img.shields.io/crates/v/ipnetx.svg)](https://crates.io/crates/ipnetx)
+<!-- Docs.rs Build Status -->
 [![Docs.rs](https://docs.rs/ipnetx/badge.svg)](https://docs.rs/ipnetx/latest/ipnetx/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![codecov](https://codecov.io/gh/dbrucknr/ipnetx/graph/badge.svg)](https://codecov.io/gh/dbrucknr/ipnetx)
+[![CI](https://github.com/dbrucknr/ipnetx/actions/workflows/ci.yml/badge.svg)](https://github.com/dbrucknr/ipnetx/actions/workflows/ci.yml)
 
 ---
 
