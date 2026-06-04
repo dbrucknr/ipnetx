@@ -2,16 +2,18 @@ use crate::{
     interfaces::IpAddress,
     prefix::IpPrefix,
     range::IpRange,
-    tools::range::{normalize, subtract_range},
+    tools::range::normalize,
 };
 
 /// A builder for constructing a normalized [`IpSet`].
 ///
 /// Ranges and prefixes may be added or removed in any order and any
-/// combination. When [`build`](IpSetBuilder::build) is called the builder
-/// sorts all pending ranges and merges any that are adjacent or overlapping,
-/// producing an [`IpSet`] whose ranges are non-overlapping and in ascending
-/// order.
+/// combination. Additions and removals are accumulated separately and applied
+/// together at [`build`](IpSetBuilder::build) time: the final set is
+/// `union(adds) − union(removes)`, so removals always win regardless of the
+/// order in which `add_*` and `remove_*` calls are interleaved. When
+/// [`build`](IpSetBuilder::build) is called the builder normalizes both sides
+/// and computes the difference in a single O((n + k) log(n + k)) pass.
 ///
 /// # Examples
 ///
@@ -29,7 +31,8 @@ use crate::{
 /// assert!(set.contains_ip(Ipv4Addr::new(10, 0, 0, 2)));
 /// ```
 pub struct IpSetBuilder<A: IpAddress> {
-    ranges: Vec<IpRange<A>>,
+    adds: Vec<IpRange<A>>,
+    removes: Vec<IpRange<A>>,
 }
 
 impl<A: IpAddress> Default for IpSetBuilder<A> {
@@ -43,7 +46,7 @@ impl<A: IpAddress> IpSetBuilder<A> {
     ///
     /// Equivalent to [`IpSetBuilder::default`].
     pub fn new() -> Self {
-        Self { ranges: Vec::new() }
+        Self { adds: Vec::new(), removes: Vec::new() }
     }
 
     /// Adds a single IP address to the set.
@@ -72,27 +75,21 @@ impl<A: IpAddress> IpSetBuilder<A> {
     /// overlapping ranges are merged when [`build`](IpSetBuilder::build) is called.
     pub fn add_range(&mut self, range: IpRange<A>) {
         if range.is_valid() {
-            self.ranges.push(range);
+            self.adds.push(range);
         }
     }
 
-    /// Removes an address range from the set.
+    /// Queues an address range for removal.
     ///
-    /// Each stored range that intersects `range` is trimmed or split as needed.
-    /// Five cases arise per stored range: no overlap (kept), fully covered
-    /// (dropped), clips left end (right piece survives), clips right end (left
-    /// piece survives), or middle removal (splits into two ranges).
+    /// The removal is applied at [`build`](IpSetBuilder::build) time against the
+    /// fully merged add-set. This is O(1) — removals are accumulated and
+    /// processed in a single pass during `build()`.
     ///
     /// Invalid ranges (`start > end`) are silently ignored.
     pub fn remove_range(&mut self, range: IpRange<A>) {
-        // O(n) time complexity
-        if !range.is_valid() {
-            return;
+        if range.is_valid() {
+            self.removes.push(range);
         }
-
-        // std::mem::take swaps self.ranges out with an empty Vec, giving
-        // subtract_range ownership of the data. The result is assigned back.
-        self.ranges = subtract_range(std::mem::take(&mut self.ranges), range);
     }
 
     /// Adds all addresses covered by `prefix` to the set.
@@ -174,13 +171,17 @@ impl<A: IpAddress> IpSetBuilder<A> {
 
     /// Consumes the builder and returns a normalized [`IpSet`].
     ///
-    /// All pending ranges are sorted by start address and merged: adjacent or
-    /// overlapping ranges are collapsed into a single range. The resulting
-    /// [`IpSet`] contains non-overlapping ranges in ascending order.
+    /// Normalizes the accumulated adds and removes separately, then computes
+    /// `union(adds) − union(removes)` in a single O((n + k) log(n + k)) pass.
+    /// The resulting [`IpSet`] contains non-overlapping ranges in ascending order.
     #[must_use]
     pub fn build(self) -> IpSet<A> {
-        let merged = normalize(self.ranges);
-        IpSet::new(merged)
+        let adds = IpSet::new(normalize(self.adds));
+        if self.removes.is_empty() {
+            return adds;
+        }
+        let removes = IpSet::new(normalize(self.removes));
+        adds.difference(&removes)
     }
 }
 

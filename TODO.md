@@ -116,6 +116,8 @@ route analysis, threat intelligence ingestion, and network auditing.
 - **`IntoIterator` for `&IpSet` and `IpSet`** ✅ — `for range in &set { ... }` and consuming iteration both work; full iterator adapter chain available.
 - **`PartialOrd` / `Ord` on `IpRange` and `IpPrefix`** — these types have a natural ordering by start address but the traits are not implemented. Needed to sort a `Vec<IpRange>` without a custom comparator or use them in a `BTreeSet`.
 - **Builder introspection** — `IpSetBuilder` is append-only until `build()` is called. A `len()` or `is_empty()` on the builder would occasionally be useful without requiring a full `build()`.
+- **`IpSet::from_ranges` bypass** — callers that already hold a sorted, non-overlapping `Vec<IpRange<A>>` (e.g. from their own parser or a deserialized wire format) have no way to skip the normalize cost inside `build()`. A `from_ranges_unchecked` or a debug-asserted `from_ranges` would remove that friction for ecosystem crates like `routemap`.
+- **Document `remove_range` O(n·k) cost** ✅ — resolved by lazy removal: `remove_range` is now O(1) and `build()` resolves all removals in a single O((n + k) log(n + k)) pass.
 
 ### Priority 4 - invariants + correctness
 
