@@ -2,13 +2,11 @@
 
 IP address range, prefix, and set operations for IPv4 and IPv6.
 
-<!-- Crates.io Version -->
 [![Crates.io](https://img.shields.io/crates/v/ipnetx.svg)](https://crates.io/crates/ipnetx)
-<!-- Docs.rs Build Status -->
 [![Docs.rs](https://docs.rs/ipnetx/badge.svg)](https://docs.rs/ipnetx/latest/ipnetx/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![codecov](https://codecov.io/gh/dbrucknr/ipnetx/graph/badge.svg)](https://codecov.io/gh/dbrucknr/ipnetx)
-[![CI](https://github.com/dbrucknr/ipnetx/actions/workflows/ci.yml/badge.svg)](https://github.com/dbrucknr/ipnetx/actions/workflows/ci.yml)
+[![CI](https://github.com/dbrucknr/ipnetx/actions/workflows/ci.yml/badge.svg)](https://github.com/dbrucknr/ipnetx/actions/workflows/rust.yml)
 
 ---
 
@@ -774,15 +772,32 @@ single snapshot.
 
 | Operation | Complexity | 100 ranges | 1 000 ranges | 10 000 ranges | Takeaway |
 |---|---|---|---|---|---|
-| `contains_ip` | O(log n) | ~892 ps | ~904 ps | ~901 ps | Effectively flat — log growth is invisible at these sizes |
-| `build` | O(n log n) | ~462 ns | ~2.68 µs | ~23.5 µs | ~5× slower per 10× more ranges, as expected |
-| `union` | O((m+n) log(m+n)) | ~38 ns | ~38 ns | ~38 ns | Allocation dominates at these sizes |
+| `contains_ip` | O(log n) | ~901 ps | ~893 ps | ~890 ps | Effectively flat — log growth is invisible at these sizes |
+| `build` (adds only) | O(n log n) | ~465 ns | ~2.65 µs | ~22.9 µs | ~5× slower per 10× more ranges, as expected |
+| `build` (with removals) | O((n+k) log(n+k)) | ~809 ns | ~4.04 µs | ~35.1 µs | ~1.5× over adds-only for 50% removal rate; removals are O(1) at call time |
+| `union` | O((m+n) log(m+n)) | ~40 ns | ~40 ns | ~40 ns | Allocation dominates at these sizes |
 | `intersection` | O(m + n) | ~22 ns | ~22 ns | ~22 ns | Flat — data fits in L1 cache |
-| `difference` | O(m + n) | ~36 ns | ~36 ns | ~36 ns | Same story as intersection |
-| `complement` | O(n) | ~21 ns | ~20 ns | ~20 ns | Single pass over stored ranges |
-| `count` | O(n) | ~1.09 ns | ~1.09 ns | ~1.08 ns | Compiler optimises the summation loop |
+| `difference` | O(m + n) | ~22 ns | ~22 ns | ~22 ns | Same story as intersection |
+| `complement` | O(n) | ~21 ns | ~22 ns | ~22 ns | Single pass over stored ranges |
+| `count` | O(n) | ~1.14 ns | ~1.13 ns | ~1.13 ns | Compiler optimises the summation loop |
 
-> Measurements taken on a MacBook Pro M2 Max, `ipnetx v0.2.0`, release profile.
+**`prefixes()` — alignment sensitivity**
+
+`prefixes()` decomposes each stored range into the minimal covering set of CIDR
+prefixes. An aligned range (power-of-two size, aligned start) produces exactly
+one prefix; a maximally unaligned range like `*.1..*.254` fans out to 14. That
+fan-out makes alignment the dominant factor in cost:
+
+| Case | 1 range | 100 ranges | 1 000 ranges | 10 000 ranges |
+|---|---|---|---|---|
+| aligned (1 prefix per range) | ~22 ns | ~71 ns | ~115 ns | ~111 ns |
+| unaligned (14 prefixes per range) | ~138 ns | ~14.6 µs | ~142 µs | ~1.38 ms |
+
+For well-aligned data (BGP tables, RFC 1918 blocks) `prefixes()` is fast at any
+scale. For arbitrary firewall ranges, expect roughly 200× the cost of the
+aligned case at 100 ranges, growing with the number of CIDR prefixes produced.
+
+> Measurements taken on a MacBook Pro M2 Max, `ipnetx v0.2.2`, release profile.
 > Times reflect data that fits comfortably in CPU cache — a realistic scenario
 > for most workloads. At BGP-table scale (~900k routes) the bottleneck shifts
 > to memory bandwidth rather than compute.

@@ -57,6 +57,24 @@ fn make_raw_ranges(count: u32) -> Vec<IpRange<Ipv4Addr>> {
         .collect()
 }
 
+/// Builds an `IpSet` of `count` unaligned ranges.
+///
+/// Each range is `10.x.y.1..10.x.y.254` — misaligned start and non-power-of-two
+/// size — so every range decomposes into 14 CIDR prefixes via `prefixes()`.
+/// Used to contrast against the aligned case in `bench_ipset_prefixes`.
+fn make_unaligned_set(count: u32) -> IpSet<Ipv4Addr> {
+    let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+    for i in 0..count {
+        let b2 = ((i / 256) % 256) as u8;
+        let b3 = (i % 256) as u8;
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(10, b2, b3, 1),
+            Ipv4Addr::new(10, b2, b3, 254),
+        ));
+    }
+    builder.build()
+}
+
 // ---------------------------------------------------------------------------
 // Benchmarks
 // ---------------------------------------------------------------------------
@@ -199,6 +217,44 @@ fn bench_build_with_removals(c: &mut Criterion) {
     group.finish();
 }
 
+/// `IpRange::prefixes` — CIDR decomposition of a single range.
+///
+/// Two cases:
+///   aligned   — `/24` block; always produces 1 prefix.
+///   unaligned — `10.0.0.1..10.0.0.254`; produces 14 prefixes (staircase).
+fn bench_iprange_prefixes(c: &mut Criterion) {
+    let mut group = c.benchmark_group("iprange_prefixes");
+    let aligned = IpRange::new(Ipv4Addr::new(192, 168, 1, 0), Ipv4Addr::new(192, 168, 1, 255));
+    group.bench_with_input(BenchmarkId::from_parameter("aligned"), &aligned, |b, r| {
+        b.iter(|| black_box(r.prefixes()));
+    });
+    let unaligned = IpRange::new(Ipv4Addr::new(10, 0, 0, 1), Ipv4Addr::new(10, 0, 0, 254));
+    group.bench_with_input(BenchmarkId::from_parameter("unaligned"), &unaligned, |b, r| {
+        b.iter(|| black_box(r.prefixes()));
+    });
+    group.finish();
+}
+
+/// `IpSet::prefixes` — CIDR decomposition across a full set.
+///
+/// Two sub-groups at each size:
+///   aligned   — each stored range is a /24 block; 1 prefix per range, O(n) total.
+///   unaligned — each stored range is `*.1..*.254`; 14 prefixes per range, O(14n) total.
+fn bench_ipset_prefixes(c: &mut Criterion) {
+    let mut group = c.benchmark_group("ipset_prefixes");
+    for &size in &[100u32, 1_000, 10_000] {
+        let aligned = make_set(0, size);
+        group.bench_with_input(BenchmarkId::new("aligned", size), &size, |b, _| {
+            b.iter(|| black_box(aligned.prefixes()));
+        });
+        let unaligned = make_unaligned_set(size);
+        group.bench_with_input(BenchmarkId::new("unaligned", size), &size, |b, _| {
+            b.iter(|| black_box(unaligned.prefixes()));
+        });
+    }
+    group.finish();
+}
+
 // ---------------------------------------------------------------------------
 
 criterion_group!(
@@ -211,5 +267,7 @@ criterion_group!(
     bench_difference,
     bench_complement,
     bench_count,
+    bench_iprange_prefixes,
+    bench_ipset_prefixes,
 );
 criterion_main!(benches);
