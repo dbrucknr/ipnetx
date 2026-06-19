@@ -289,7 +289,7 @@ impl<A: IpAddress> IpSet<A> {
     /// can be large for sets that contain many unaligned ranges.
     #[must_use]
     pub fn prefixes(&self) -> Vec<IpPrefix<A>> {
-        let mut prefixes = Vec::<IpPrefix<A>>::with_capacity(self.ranges.len());
+        let mut prefixes = Vec::<IpPrefix<A>>::new();
         for range in &self.ranges {
             prefixes.extend(range.prefixes());
         }

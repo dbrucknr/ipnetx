@@ -208,9 +208,15 @@ impl<A: IpAddress> IpRange<A> {
             // is the largest h satisfying 2^h <= size.
             // Special case: when span == u128::MAX the size is 2^128 (IPv6 full
             // space), which overflows u128; alignment is the only constraint.
+            // When span fits in 63 bits we cast to u64 before calling ilog2 —
+            // u64::ilog2 maps to a single LZCNT on x86-64, while u128::ilog2
+            // requires branching over two 64-bit halves. For IPv4 this path is
+            // always taken (span <= u32::MAX).
             let span = end - start;
             let host_bits = if span == u128::MAX {
                 max_host_bits
+            } else if span >> 63 == 0 {
+                max_host_bits.min(((span + 1) as u64).ilog2())
             } else {
                 max_host_bits.min((span + 1).ilog2())
             };
