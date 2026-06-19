@@ -289,7 +289,7 @@ impl<A: IpAddress> IpSet<A> {
     /// can be large for sets that contain many unaligned ranges.
     #[must_use]
     pub fn prefixes(&self) -> Vec<IpPrefix<A>> {
-        let mut prefixes = Vec::<IpPrefix<A>>::new();
+        let mut prefixes = Vec::<IpPrefix<A>>::with_capacity(self.ranges.len());
         for range in &self.ranges {
             prefixes.extend(range.prefixes());
         }
@@ -430,7 +430,33 @@ impl<A: IpAddress> IpSet<A> {
     /// ```
     #[must_use]
     pub fn is_subset_of(&self, other: &IpSet<A>) -> bool {
-        self.difference(other).is_empty()
+        if self.is_empty() {
+            return true;
+        }
+        if other.is_empty() {
+            return false;
+        }
+        // Two-pointer walk — O(m + n), no allocation.
+        // Both sets are sorted and non-overlapping. For each range in self,
+        // find the single range in other that must fully cover it (a normalized
+        // set has no adjacent ranges, so a span crossing a gap is never covered).
+        let mut j = 0usize;
+        for a in &self.ranges {
+            let a_start = a.start().to_u128();
+            let a_end = a.end().to_u128();
+            // Skip other-ranges that end before this range starts.
+            while j < other.ranges.len() && other.ranges[j].end().to_u128() < a_start {
+                j += 1;
+            }
+            // No candidate, or candidate starts after a_start, or ends before a_end.
+            if j >= other.ranges.len()
+                || other.ranges[j].start().to_u128() > a_start
+                || other.ranges[j].end().to_u128() < a_end
+            {
+                return false;
+            }
+        }
+        true
     }
 
     /// Returns `true` if every address in `other` is also contained in `self`.

@@ -131,8 +131,9 @@ impl<A: IpAddress> IpPrefix<A> {
     #[must_use]
     pub fn to_range(&self) -> IpRange<A> {
         let ip = self.ip.to_u128();
+        let addr_max: u128 = u128::MAX >> (128 - A::BITS as u32);
         let network = self.network_mask();
-        let host = self.host_mask();
+        let host = addr_max & !network;
         // start: zero out the host bits (network address)
         // end:   set all the host bits (broadcast / last address)
         IpRange::new(A::from_u128(ip & network), A::from_u128(ip | host))
@@ -189,12 +190,7 @@ impl<A: IpAddress> IpPrefix<A> {
         addr_max & shifted
     }
 
-    /// Bit mask covering the host portion (bottom `BITS - mask` bits).
-    /// e.g. /24 on IPv4 → 0x000000FF.
-    fn host_mask(&self) -> u128 {
-        let addr_max: u128 = u128::MAX >> (128 - A::BITS as u32);
-        addr_max & !self.network_mask()
-    }
+
 }
 
 impl<A: IpAddress> std::fmt::Display for IpPrefix<A> {

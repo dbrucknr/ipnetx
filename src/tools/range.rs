@@ -2,7 +2,7 @@ use crate::{interfaces::IpAddress, range::IpRange};
 
 pub(crate) fn normalize<A: IpAddress>(mut ranges: Vec<IpRange<A>>) -> Vec<IpRange<A>> {
     // Sort by Address
-    ranges.sort_by_key(|range| range.start().to_u128());
+    ranges.sort_unstable_by_key(|range| range.start());
     // Merge overlapping ranges
     let mut merged = Vec::<IpRange<A>>::new();
     for range in ranges {

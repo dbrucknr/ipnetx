@@ -9,6 +9,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 /// bounds like `Copy + PartialOrd + Display`.
 pub trait IpAddress:
     crate::private::Sealed
+    + Ord
     + PartialOrd
     + Copy
     + std::fmt::Display
