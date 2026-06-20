@@ -38,3 +38,6 @@ pub mod prefix;
 mod private;
 pub mod range;
 mod tools;
+
+#[cfg(test)]
+mod proptests;
