@@ -2,6 +2,8 @@
 - Before publishing, check the code test coverage.
 - Run: `cargo publish --dry-run`
 - Run `cargo test` to run the test suite.
+- Check Doc Tests `cargo test --doc`
+-  Check Clippy `cargo clippy -- -D warnings`
 - Run `cargo llvm-cov` to generate a test coverage report.
 - `cargo clippy -- -D warnings` to run clippy with all warnings enabled. Fix anything it finds.
 - Try and reflect on documentation and the `README.md`. Does anything need to be updated?
