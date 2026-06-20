@@ -82,6 +82,7 @@ route analysis, threat intelligence ingestion, and network auditing.
 | `a.intersection(&b) -> IpSet` | ✅ | "Which IPs are in both our network and this threat feed?" |
 | `a.difference(&b) -> IpSet` | ✅ | "Everything in the allow-list that isn't also in the block-list" |
 | `a.complement() -> IpSet` | ✅ | "Every IP *not* covered by this set" — deny-by-default rules |
+| `a.symmetric_difference(&b) -> IpSet` | ❌ | "What changed between two route tables?" — (a ∖ b) ∪ (b ∖ a); expressible today but no O(m+n) dedicated path |
 
 ### Tier 2 — useful additions
 
@@ -92,6 +93,7 @@ route analysis, threat intelligence ingestion, and network auditing.
 | `IpSet::is_superset_of(&other)` | ✅ | Symmetric counterpart to `is_subset_of` |
 | `FromIterator<IpPrefix<A>>` for `IpSetBuilder` | ✅ | `prefixes.into_iter().collect::<IpSetBuilder<_>>()` |
 | `FromIterator<IpRange<A>>` for `IpSetBuilder` | ✅ | Same ergonomics for ranges |
+| `Display` for `IpSet` | ❌ | `IpRange` and `IpPrefix` are printable; `IpSet` is not — can't log or debug-print a set |
 
 ### Tier 3 — table stakes
 
@@ -106,6 +108,7 @@ route analysis, threat intelligence ingestion, and network auditing.
 ### Priority 1 — correctness debt
 
 - **Fix `difference()` to O(m+n)** ✅ — replaced the O(m×n) `subtract_range` loop with a two-pointer walk matching the approach used in `intersection()`.
+- **`count()` overflow on full IPv6 space** — `count()` returns `u128` but the full IPv6 space has 2^128 addresses, which doesn't fit. The internal `end - start + 1` overflows: panics in debug mode, wraps silently to 0 in release. Options: `saturating_count() -> u128`, returning `Option<u128>`, or a checked variant. Discovered when writing `test_v6_count_full_space`.
 
 ### Priority 2 — ecosystem reach
 
@@ -121,7 +124,7 @@ route analysis, threat intelligence ingestion, and network auditing.
 
 ### Priority 4 - invariants + correctness
 
-- **proptests** — Automated property testing for correctness and invariants.
+- **proptests** ✅ — 97 property tests covering algebraic laws, round-trips, and normalization invariants for both IPv4 and IPv6, including cross-validation of `difference` against `intersection_with_complement`.
 - **cargo fuzz** — Fuzz testing for security and edge cases.
 
 ---
