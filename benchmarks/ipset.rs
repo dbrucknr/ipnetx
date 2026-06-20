@@ -75,6 +75,26 @@ fn make_unaligned_set(count: u32) -> IpSet<Ipv4Addr> {
     builder.build()
 }
 
+/// Builds an `IpSet` of `count` non-merging ranges with a gap between each.
+///
+/// Each range covers `10.x.y.0..10.x.y.100` with a step of 3 between block
+/// indices, leaving a gap that prevents normalization from merging them. A
+/// non-zero `start_offset` shifts the block indices so two calls with offsets
+/// 0 and 1 produce perfectly interleaved sets — ideal for stressing `union`.
+fn make_sparse_set(start_offset: u32, count: u32) -> IpSet<Ipv4Addr> {
+    let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+    for i in 0..count {
+        let idx = start_offset + i * 3;
+        let b2 = ((idx / 256) % 256) as u8;
+        let b3 = (idx % 256) as u8;
+        builder.add_range(IpRange::new(
+            Ipv4Addr::new(10, b2, b3, 0),
+            Ipv4Addr::new(10, b2, b3, 100),
+        ));
+    }
+    builder.build()
+}
+
 // ---------------------------------------------------------------------------
 // Benchmarks
 // ---------------------------------------------------------------------------
@@ -113,13 +133,30 @@ fn bench_build(c: &mut Criterion) {
     group.finish();
 }
 
-/// `union` — concatenate + normalize; O((m + n) log(m + n)).
+/// `union` — two-pointer merge + collapse; O(m + n).
 fn bench_union(c: &mut Criterion) {
     let mut group = c.benchmark_group("union");
     for &size in &[100u32, 1_000, 10_000] {
         // Overlap in the upper half of a / lower half of b
         let a = make_set(0, size);
         let b = make_set(size / 2, size);
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |bench, _| {
+            bench.iter(|| black_box(a.union(black_box(&b))));
+        });
+    }
+    group.finish();
+}
+
+/// `union` with sparse (non-merging) sets — the case that most benefits from the
+/// O(m+n) merge over the old O((m+n) log(m+n)) sort.
+///
+/// Set `a` holds ranges at block indices 0, 3, 6, ...; set `b` at 1, 4, 7, ...
+/// The two sets interleave perfectly and produce 2×size ranges after union.
+fn bench_union_sparse(c: &mut Criterion) {
+    let mut group = c.benchmark_group("union_sparse");
+    for &size in &[100u32, 1_000, 10_000] {
+        let a = make_sparse_set(0, size);
+        let b = make_sparse_set(1, size);
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |bench, _| {
             bench.iter(|| black_box(a.union(black_box(&b))));
         });
@@ -217,6 +254,39 @@ fn bench_build_with_removals(c: &mut Criterion) {
     group.finish();
 }
 
+/// `is_subset_of` — two-pointer walk via difference; O(m + n).
+///
+/// Three cases:
+///   true_subset  — a is fully contained within b (best case: early exit possible).
+///   false_subset — a extends beyond b (worst case: full walk).
+///   disjoint     — a and b share no addresses.
+fn bench_is_subset_of(c: &mut Criterion) {
+    let mut group = c.benchmark_group("is_subset_of");
+    for &size in &[100u32, 1_000, 10_000] {
+        // a ⊆ b: inner half is always a subset of the full set
+        let a_sub = make_set(size / 4, size / 2);
+        let b_full = make_set(0, size);
+        group.bench_with_input(BenchmarkId::new("true_subset", size), &size, |bench, _| {
+            bench.iter(|| black_box(a_sub.is_subset_of(black_box(&b_full))));
+        });
+
+        // a ⊄ b: a extends past b's end
+        let a_ext = make_set(size / 2, size);
+        let b_half = make_set(0, size / 2);
+        group.bench_with_input(BenchmarkId::new("false_subset", size), &size, |bench, _| {
+            bench.iter(|| black_box(a_ext.is_subset_of(black_box(&b_half))));
+        });
+
+        // Disjoint: a and b share no addresses
+        let a_lo = make_set(0, size / 2);
+        let b_hi = make_set(size, size / 2);
+        group.bench_with_input(BenchmarkId::new("disjoint", size), &size, |bench, _| {
+            bench.iter(|| black_box(a_lo.is_subset_of(black_box(&b_hi))));
+        });
+    }
+    group.finish();
+}
+
 /// `IpRange::prefixes` — CIDR decomposition of a single range.
 ///
 /// Two cases:
@@ -263,10 +333,12 @@ criterion_group!(
     bench_build,
     bench_build_with_removals,
     bench_union,
+    bench_union_sparse,
     bench_intersection,
     bench_difference,
     bench_complement,
     bench_count,
+    bench_is_subset_of,
     bench_iprange_prefixes,
     bench_ipset_prefixes,
 );

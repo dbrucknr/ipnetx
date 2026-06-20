@@ -199,23 +199,27 @@ impl<A: IpAddress> IpRange<A> {
         let bits = A::BITS as u32;
 
         while start <= end {
-            // How many trailing zero bits does `start` have?
-            // A CIDR block of size 2^h must be aligned to 2^h, so `start`
-            // must have at least h trailing zeros to be the network address.
-            // e.g. a /30 (h=2) must start at ...00 in binary.
+            // Alignment constraint: a CIDR block of 2^h addresses must start
+            // on a 2^h boundary, so h <= trailing_zeros(start).
             let max_host_bits = start.trailing_zeros().min(bits);
 
-            // Of the allowed sizes, pick the largest block that fits within
-            // `end` — work downward from max_host_bits until the block end
-            // doesn't overshoot.
-            let host_bits = (0..=max_host_bits)
-                .rev()
-                .find(|&h| {
-                    // host_mask: all 1s in the bottom h bits, 0s above
-                    let host_mask: u128 = if h == 0 { 0 } else { u128::MAX >> (128 - h) };
-                    start | host_mask <= end
-                })
-                .unwrap_or(0);
+            // Size constraint: the block must fit within [start, end], so
+            // 2^h <= end - start + 1.  ilog2 gives floor(log2(size)), which
+            // is the largest h satisfying 2^h <= size.
+            // Special case: when span == u128::MAX the size is 2^128 (IPv6 full
+            // space), which overflows u128; alignment is the only constraint.
+            // When span fits in 63 bits we cast to u64 before calling ilog2 —
+            // u64::ilog2 maps to a single LZCNT on x86-64, while u128::ilog2
+            // requires branching over two 64-bit halves. For IPv4 this path is
+            // always taken (span <= u32::MAX).
+            let span = end - start;
+            let host_bits = if span == u128::MAX {
+                max_host_bits
+            } else if span >> 63 == 0 {
+                max_host_bits.min(((span + 1) as u64).ilog2())
+            } else {
+                max_host_bits.min((span + 1).ilog2())
+            };
 
             let host_mask: u128 = if host_bits == 0 {
                 0
