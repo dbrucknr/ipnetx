@@ -380,6 +380,20 @@ mod tests {
         assert_eq!(range.end(), Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1));
     }
 
+    // cargo test prefix::tests::test_ip_v6_prefix_to_range_entire_addr_space
+    #[test]
+    fn test_ip_v6_prefix_to_range_entire_addr_space() {
+        // ::/0 spans the full IPv6 address space
+        let prefix = IpPrefix::<Ipv6Addr>::new(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0), 0).unwrap();
+        let range = prefix.to_range();
+
+        assert_eq!(range.start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(
+            range.end(),
+            Ipv6Addr::new(0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff)
+        );
+    }
+
     // cargo test prefix::tests::test_ip_v4_prefix_display
     #[test]
     fn test_ip_v4_prefix_display() {
@@ -455,6 +469,27 @@ mod tests {
         let masked = prefix.masked();
         assert_eq!(masked.ip(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
         assert_eq!(masked.mask(), 0);
+    }
+
+    // cargo test prefix::tests::test_v6_masked_already_clean
+    #[test]
+    fn test_v6_masked_already_clean() {
+        // Network address with no host bits — masked() is a no-op
+        let prefix = IpPrefix::new(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0), 64).unwrap();
+        let masked = prefix.masked();
+        assert_eq!(masked.ip(), Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0));
+        assert_eq!(masked.mask(), 64);
+    }
+
+    // cargo test prefix::tests::test_v6_masked_slash128
+    #[test]
+    fn test_v6_masked_slash128() {
+        // /128 has no host bits — masked() is always a no-op
+        let prefix =
+            IpPrefix::new(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1), 128).unwrap();
+        let masked = prefix.masked();
+        assert_eq!(masked.ip(), Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1));
+        assert_eq!(masked.mask(), 128);
     }
 
     // --- is_single_ip() ---
@@ -552,6 +587,33 @@ mod tests {
         let a = IpPrefix::new(Ipv6Addr::new(0x2001, 0, 0, 0, 0, 0, 0, 0), 32).unwrap();
         let b = IpPrefix::new(Ipv6Addr::new(0x2002, 0, 0, 0, 0, 0, 0, 0), 32).unwrap();
         assert!(!a.overlaps(&b));
+    }
+
+    // cargo test prefix::tests::test_v6_overlaps_same_prefix
+    #[test]
+    fn test_v6_overlaps_same_prefix() {
+        // A prefix always overlaps itself
+        let p = IpPrefix::new(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0), 32).unwrap();
+        assert!(p.overlaps(&p));
+    }
+
+    // cargo test prefix::tests::test_v6_overlaps_adjacent
+    #[test]
+    fn test_v6_overlaps_adjacent() {
+        // 2001:db8::/33 and 2001:db8:8000::/33 — adjacent halves of /32, not overlapping
+        let lo = IpPrefix::new(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0), 33).unwrap();
+        let hi = IpPrefix::new(Ipv6Addr::new(0x2001, 0x0db8, 0x8000, 0, 0, 0, 0, 0), 33).unwrap();
+        assert!(!lo.overlaps(&hi));
+    }
+
+    // cargo test prefix::tests::test_v6_overlaps_unmasked_ip
+    #[test]
+    fn test_v6_overlaps_unmasked_ip() {
+        // Host bits in the IP are masked out before comparison:
+        // 2001:db8::ff/120 is treated as 2001:db8::/120, which overlaps 2001:db8::/121
+        let p1 = IpPrefix::new(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0xff), 120).unwrap();
+        let p2 = IpPrefix::new(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0), 121).unwrap();
+        assert!(p1.overlaps(&p2));
     }
 
     // --- FromStr ---
@@ -664,6 +726,30 @@ mod tests {
         let s = "2001:db8::/32";
         let p: IpPrefix<Ipv6Addr> = s.parse().unwrap();
         assert_eq!(p.to_string(), s);
+    }
+
+    // cargo test prefix::tests::test_v6_parse_preserves_host_bits
+    #[test]
+    fn test_v6_parse_preserves_host_bits() {
+        // FromStr (like new()) preserves host bits — use .masked() for canonical form
+        let p: IpPrefix<Ipv6Addr> = "2001:db8::ff/120".parse().unwrap();
+        assert_eq!(p.ip(), Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0xff));
+        assert_eq!(p.mask(), 120);
+    }
+
+    // cargo test prefix::tests::test_v6_parse_missing_separator
+    #[test]
+    fn test_v6_parse_missing_separator() {
+        // No '/' present
+        let err = "2001:db8::".parse::<IpPrefix<Ipv6Addr>>().unwrap_err();
+        assert_eq!(err, ParsePrefixError::MissingSeparator);
+    }
+
+    // cargo test prefix::tests::test_v6_parse_mask_not_a_number
+    #[test]
+    fn test_v6_parse_mask_not_a_number() {
+        let err = "2001:db8::/abc".parse::<IpPrefix<Ipv6Addr>>().unwrap_err();
+        assert_eq!(err, ParsePrefixError::InvalidMask);
     }
 
     // cargo test prefix::tests::test_v6_parse_mask_out_of_range

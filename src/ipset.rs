@@ -799,6 +799,14 @@ mod tests {
         assert!(ipset.is_empty());
     }
 
+    // cargo test ipset::tests::test_v6_ipset_default_construction
+    #[test]
+    fn test_v6_ipset_default_construction() {
+        let builder = IpSetBuilder::<Ipv6Addr>::default();
+        let ipset = builder.build();
+        assert!(ipset.is_empty());
+    }
+
     // cargo test ipset::tests::test_v4_ipset_add_range_construction
     #[test]
     fn test_v4_ipset_add_range_construction() {
@@ -946,6 +954,19 @@ mod tests {
         assert_eq!(ipset.ranges()[0].end(), Ipv4Addr::new(192, 168, 1, 1));
     }
 
+    // cargo test ipset::tests::test_v6_add_ip
+    #[test]
+    fn test_v6_add_ip() {
+        let ip = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_ip(ip);
+        let ipset = builder.build();
+        assert!(!ipset.is_empty());
+        assert_eq!(ipset.len(), 1);
+        assert_eq!(ipset.ranges()[0].start(), ip);
+        assert_eq!(ipset.ranges()[0].end(), ip);
+    }
+
     // --- Remove IP ---
     // cargo test ipset::tests::test_remove_ip
     #[test]
@@ -957,6 +978,17 @@ mod tests {
 
         assert!(ipset.is_empty());
         assert_eq!(ipset.len(), 0);
+    }
+
+    // cargo test ipset::tests::test_v6_remove_ip
+    #[test]
+    fn test_v6_remove_ip() {
+        let ip = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_ip(ip);
+        builder.remove_ip(ip);
+        let ipset = builder.build();
+        assert!(ipset.is_empty());
     }
 
     // --- Remove IP: split and no-op ---
@@ -978,6 +1010,24 @@ mod tests {
         assert_eq!(ipset.ranges()[1].end(), Ipv4Addr::new(10, 0, 0, 10));
     }
 
+    // cargo test ipset::tests::test_v6_remove_ip_splits_range
+    #[test]
+    fn test_v6_remove_ip_splits_range() {
+        // Remove ::5 from [::1..::10] → [::1..::4] and [::6..::10]
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        ));
+        builder.remove_ip(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 5));
+        let ipset = builder.build();
+        assert_eq!(ipset.len(), 2);
+        assert_eq!(ipset.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
+        assert_eq!(ipset.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 4));
+        assert_eq!(ipset.ranges()[1].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 6));
+        assert_eq!(ipset.ranges()[1].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10));
+    }
+
     // cargo test ipset::tests::test_remove_ip_not_in_set
     #[test]
     fn test_remove_ip_not_in_set() {
@@ -988,6 +1038,19 @@ mod tests {
             Ipv4Addr::new(10, 0, 0, 10),
         ));
         builder.remove_ip(Ipv4Addr::new(10, 0, 0, 20));
+        let ipset = builder.build();
+        assert_eq!(ipset.len(), 1);
+    }
+
+    // cargo test ipset::tests::test_v6_remove_ip_not_in_set
+    #[test]
+    fn test_v6_remove_ip_not_in_set() {
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        ));
+        builder.remove_ip(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20));
         let ipset = builder.build();
         assert_eq!(ipset.len(), 1);
     }
@@ -1007,6 +1070,22 @@ mod tests {
         assert_eq!(ipset.len(), 1);
         assert_eq!(ipset.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 1));
         assert_eq!(ipset.ranges()[0].end(), Ipv4Addr::new(10, 0, 0, 11));
+    }
+
+    // cargo test ipset::tests::test_v6_add_ip_merges_adjacent
+    #[test]
+    fn test_v6_add_ip_merges_adjacent() {
+        // ::b is adjacent to [::1..::a] — should merge
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        ));
+        builder.add_ip(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 11));
+        let ipset = builder.build();
+        assert_eq!(ipset.len(), 1);
+        assert_eq!(ipset.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
+        assert_eq!(ipset.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 11));
     }
 
     // Note on remove operations: removing from the middle of a stored range requires splitting it into up to two pieces.
@@ -1030,6 +1109,24 @@ mod tests {
         assert_eq!(ipset.len(), 1);
         assert_eq!(ipset.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 1));
         assert_eq!(ipset.ranges()[0].end(), Ipv4Addr::new(10, 0, 0, 10));
+    }
+
+    // cargo test ipset::tests::test_v6_remove_range_invalid_is_noop
+    #[test]
+    fn test_v6_remove_range_invalid_is_noop() {
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        ));
+        builder.remove_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1), // invalid
+        ));
+        let ipset = builder.build();
+        assert_eq!(ipset.len(), 1);
+        assert_eq!(ipset.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
+        assert_eq!(ipset.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10));
     }
 
     // --- Remove Range ---
@@ -1129,6 +1226,98 @@ mod tests {
         assert_eq!(ipset.ranges()[1].end(), Ipv4Addr::new(10, 0, 0, 10));
     }
 
+    // cargo test ipset::tests::test_v6_remove_range
+    #[test]
+    fn test_v6_remove_range() {
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        ));
+        builder.remove_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        ));
+        assert!(builder.build().is_empty());
+    }
+
+    // cargo test ipset::tests::test_v6_remove_range_no_overlap
+    #[test]
+    fn test_v6_remove_range_no_overlap() {
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        ));
+        builder.remove_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 30),
+        ));
+        let ipset = builder.build();
+        assert_eq!(ipset.len(), 1);
+        assert_eq!(ipset.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
+        assert_eq!(ipset.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10));
+    }
+
+    // cargo test ipset::tests::test_v6_remove_range_clips_left_of_stored
+    #[test]
+    fn test_v6_remove_range_clips_left_of_stored() {
+        // Remove [::1..::5] from [::1..::10] → right piece [::6..::10] survives
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        ));
+        builder.remove_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 5),
+        ));
+        let ipset = builder.build();
+        assert_eq!(ipset.len(), 1);
+        assert_eq!(ipset.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 6));
+        assert_eq!(ipset.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10));
+    }
+
+    // cargo test ipset::tests::test_v6_remove_range_clips_right_of_stored
+    #[test]
+    fn test_v6_remove_range_clips_right_of_stored() {
+        // Remove [::6..::10] from [::1..::10] → left piece [::1..::5] survives
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        ));
+        builder.remove_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 6),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        ));
+        let ipset = builder.build();
+        assert_eq!(ipset.len(), 1);
+        assert_eq!(ipset.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
+        assert_eq!(ipset.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 5));
+    }
+
+    // cargo test ipset::tests::test_v6_remove_range_middle_split
+    #[test]
+    fn test_v6_remove_range_middle_split() {
+        // Remove [::4..::7] from [::1..::10] → [::1..::3] and [::8..::10]
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        ));
+        builder.remove_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 4),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 7),
+        ));
+        let ipset = builder.build();
+        assert_eq!(ipset.len(), 2);
+        assert_eq!(ipset.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1));
+        assert_eq!(ipset.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 3));
+        assert_eq!(ipset.ranges()[1].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 8));
+        assert_eq!(ipset.ranges()[1].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10));
+    }
+
     // --- Remove Prefix
     // cargo test ipset::tests::test_remove_prefix
     #[test]
@@ -1140,6 +1329,15 @@ mod tests {
 
         assert!(ipset.is_empty());
         assert_eq!(ipset.len(), 0);
+    }
+
+    // cargo test ipset::tests::test_v6_remove_prefix
+    #[test]
+    fn test_v6_remove_prefix() {
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_prefix(IpPrefix::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32).unwrap());
+        builder.remove_prefix(IpPrefix::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32).unwrap());
+        assert!(builder.build().is_empty());
     }
 
     // --- Builder: edge cases ---
@@ -1214,6 +1412,25 @@ mod tests {
         );
     }
 
+    // cargo test ipset::tests::test_v6_builder_overlapping_ranges_merged
+    #[test]
+    fn test_v6_builder_overlapping_ranges_merged() {
+        // Two overlapping v6 ranges collapse into one
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        ));
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 30),
+        ));
+        let ipset = builder.build();
+        assert_eq!(ipset.len(), 1);
+        assert_eq!(ipset.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(ipset.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 30));
+    }
+
     // cargo test ipset::tests::test_v4_builder_overlapping_ranges_merged
     #[test]
     fn test_v4_builder_overlapping_ranges_merged() {
@@ -1227,6 +1444,31 @@ mod tests {
         assert_eq!(ipset.len(), 1);
         assert_eq!(ipset.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 0));
         assert_eq!(ipset.ranges()[0].end(), Ipv4Addr::new(10, 0, 0, 20));
+    }
+
+    // cargo test ipset::tests::test_v6_builder_three_ranges_partial_merge
+    #[test]
+    fn test_v6_builder_three_ranges_partial_merge() {
+        // Three ranges: first two merge, third stays separate
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        ));
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 5),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        ));
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 50),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 60),
+        ));
+        let ipset = builder.build();
+        assert_eq!(ipset.len(), 2);
+        assert_eq!(ipset.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(ipset.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20));
+        assert_eq!(ipset.ranges()[1].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 50));
+        assert_eq!(ipset.ranges()[1].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 60));
     }
 
     // cargo test ipset::tests::test_v4_builder_three_ranges_partial_merge
@@ -1249,6 +1491,39 @@ mod tests {
     }
 
     // --- Contains IP: boundary and gap ---
+
+    // cargo test ipset::tests::test_v6_contains_ip_start_boundary
+    #[test]
+    fn test_v6_contains_ip_start_boundary() {
+        let mut b = IpSetBuilder::<Ipv6Addr>::new();
+        b.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        ));
+        let set = b.build();
+        assert!(set.contains_ip(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10))); // start inclusive
+        assert!(!set.contains_ip(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 9))); // just before
+    }
+
+    // cargo test ipset::tests::test_v6_contains_ip_end_boundary
+    #[test]
+    fn test_v6_contains_ip_end_boundary() {
+        let mut b = IpSetBuilder::<Ipv6Addr>::new();
+        b.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        ));
+        let set = b.build();
+        assert!(set.contains_ip(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20))); // end inclusive
+        assert!(!set.contains_ip(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 21))); // just after
+    }
+
+    // cargo test ipset::tests::test_v6_contains_ip_empty_set
+    #[test]
+    fn test_v6_contains_ip_empty_set() {
+        let empty = IpSetBuilder::<Ipv6Addr>::new().build();
+        assert!(!empty.contains_ip(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)));
+    }
 
     // cargo test ipset::tests::test_v4_contains_ip_start_boundary
     #[test]
@@ -1331,6 +1606,53 @@ mod tests {
         let ipset = builder.build();
         let query = IpRange::new(Ipv4Addr::new(10, 0, 0, 10), Ipv4Addr::new(10, 0, 0, 50));
         assert!(ipset.contains_range(query));
+    }
+
+    // cargo test ipset::tests::test_v6_contains_range_exact_match
+    #[test]
+    fn test_v6_contains_range_exact_match() {
+        let range = IpRange::new(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0xff),
+        );
+        let mut b = IpSetBuilder::<Ipv6Addr>::new();
+        b.add_range(range);
+        let set = b.build();
+        assert!(set.contains_range(range));
+    }
+
+    // cargo test ipset::tests::test_v6_contains_range_exceeds_stored
+    #[test]
+    fn test_v6_contains_range_exceeds_stored() {
+        // Asked range is wider than any stored range
+        let mut b = IpSetBuilder::<Ipv6Addr>::new();
+        b.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        ));
+        let set = b.build();
+        let wide = IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 5),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 25),
+        );
+        assert!(!set.contains_range(wide));
+    }
+
+    // cargo test ipset::tests::test_v6_contains_range_invalid_input
+    #[test]
+    fn test_v6_contains_range_invalid_input() {
+        // Invalid range (start > end) is never contained
+        let mut b = IpSetBuilder::<Ipv6Addr>::new();
+        b.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        ));
+        let set = b.build();
+        let bad = IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 5),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 3),
+        );
+        assert!(!set.contains_range(bad));
     }
 
     // cargo test ipset::tests::test_v4_contains_range_exact_match
@@ -1486,6 +1808,38 @@ mod tests {
         assert!(!populated.overlaps_ip_set(&empty));
         assert!(!empty.overlaps_ip_set(&populated));
         assert!(!empty.overlaps_ip_set(&empty));
+    }
+
+    // cargo test ipset::tests::test_v6_overlaps_ip_set_single_address_touch
+    #[test]
+    fn test_v6_overlaps_ip_set_single_address_touch() {
+        // Sets that share exactly one address
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        );
+        let b = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        );
+        assert!(a.overlaps_ip_set(&b));
+        assert!(b.overlaps_ip_set(&a));
+    }
+
+    // cargo test ipset::tests::test_v6_overlaps_ip_set_subset
+    #[test]
+    fn test_v6_overlaps_ip_set_subset() {
+        // One set fully contained in the other still overlaps
+        let outer = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 100),
+        );
+        let inner = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        );
+        assert!(outer.overlaps_ip_set(&inner));
+        assert!(inner.overlaps_ip_set(&outer));
     }
 
     // cargo test ipset::tests::test_v4_overlaps_ip_set_single_address_touch
@@ -1832,6 +2186,72 @@ mod tests {
         assert_eq!(a.union(&b), b.union(&a));
     }
 
+    // cargo test ipset::tests::test_v6_union_adjacent
+    #[test]
+    fn test_v6_union_adjacent() {
+        // Adjacent ranges collapse into one after union
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        );
+        let b = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 11),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        );
+        let u = a.union(&b);
+        assert_eq!(u.len(), 1);
+        assert_eq!(u.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(u.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20));
+    }
+
+    // cargo test ipset::tests::test_v6_union_subset
+    #[test]
+    fn test_v6_union_subset() {
+        // One set fully inside the other — union equals the larger
+        let outer = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 100),
+        );
+        let inner = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        );
+        assert_eq!(outer.union(&inner), outer);
+    }
+
+    // cargo test ipset::tests::test_v6_union_with_empty
+    #[test]
+    fn test_v6_union_with_empty() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        );
+        let empty = IpSetBuilder::<Ipv6Addr>::new().build();
+        assert_eq!(a.union(&empty), a);
+        assert_eq!(empty.union(&a), a);
+    }
+
+    // cargo test ipset::tests::test_v6_union_both_empty
+    #[test]
+    fn test_v6_union_both_empty() {
+        let empty = IpSetBuilder::<Ipv6Addr>::new().build();
+        assert!(empty.union(&empty).is_empty());
+    }
+
+    // cargo test ipset::tests::test_v6_union_symmetric
+    #[test]
+    fn test_v6_union_symmetric() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        );
+        let b = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 5),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        );
+        assert_eq!(a.union(&b), b.union(&a));
+    }
+
     // cargo test ipset::tests::test_v6_union_disjoint
     #[test]
     fn test_v6_union_disjoint() {
@@ -1975,6 +2395,122 @@ mod tests {
         assert_eq!(d.len(), 1);
         assert_eq!(d.ranges()[0].start(), Ipv4Addr::new(192, 168, 1, 0));
         assert_eq!(d.ranges()[0].end(), Ipv4Addr::new(192, 168, 1, 255));
+    }
+
+    // cargo test ipset::tests::test_v6_difference_clips_left
+    #[test]
+    fn test_v6_difference_clips_left() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        );
+        let b = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        );
+        let d = a.difference(&b);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 11));
+        assert_eq!(d.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20));
+    }
+
+    // cargo test ipset::tests::test_v6_difference_clips_right
+    #[test]
+    fn test_v6_difference_clips_right() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        );
+        let b = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        );
+        let d = a.difference(&b);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(d.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 9));
+    }
+
+    // cargo test ipset::tests::test_v6_difference_equal
+    #[test]
+    fn test_v6_difference_equal() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        );
+        assert!(a.difference(&a).is_empty());
+    }
+
+    // cargo test ipset::tests::test_v6_difference_fully_covered
+    #[test]
+    fn test_v6_difference_fully_covered() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 5),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 15),
+        );
+        let b = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        );
+        assert!(a.difference(&b).is_empty());
+    }
+
+    // cargo test ipset::tests::test_v6_difference_with_empty
+    #[test]
+    fn test_v6_difference_with_empty() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        );
+        let empty = IpSetBuilder::<Ipv6Addr>::new().build();
+        assert_eq!(a.difference(&empty), a);
+        assert!(empty.difference(&a).is_empty());
+    }
+
+    // cargo test ipset::tests::test_v6_difference_not_symmetric
+    #[test]
+    fn test_v6_difference_not_symmetric() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        );
+        let b = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 30),
+        );
+        assert_ne!(a.difference(&b), b.difference(&a));
+    }
+
+    // cargo test ipset::tests::test_v6_difference_multi_range
+    #[test]
+    fn test_v6_difference_multi_range() {
+        // b punches two holes in a
+        let mut ba = IpSetBuilder::<Ipv6Addr>::new();
+        ba.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 100),
+        ));
+        let a = ba.build();
+
+        let mut bb = IpSetBuilder::<Ipv6Addr>::new();
+        bb.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        ));
+        bb.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 50),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 60),
+        ));
+        let b = bb.build();
+
+        let d = a.difference(&b);
+        assert_eq!(d.len(), 3);
+        assert_eq!(d.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(d.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 9));
+        assert_eq!(d.ranges()[1].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 21));
+        assert_eq!(d.ranges()[1].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 49));
+        assert_eq!(d.ranges()[2].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 61));
+        assert_eq!(d.ranges()[2].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 100));
     }
 
     // cargo test ipset::tests::test_v6_difference_punches_hole
@@ -2148,6 +2684,104 @@ mod tests {
         assert_eq!(inter.ranges()[1].end(), Ipv4Addr::new(10, 0, 1, 255));
     }
 
+    // cargo test ipset::tests::test_v6_intersection_partial_overlap
+    #[test]
+    fn test_v6_intersection_partial_overlap() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 15),
+        );
+        let b = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 25),
+        );
+        let i = a.intersection(&b);
+        assert_eq!(i.len(), 1);
+        assert_eq!(i.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10));
+        assert_eq!(i.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 15));
+    }
+
+    // cargo test ipset::tests::test_v6_intersection_equal
+    #[test]
+    fn test_v6_intersection_equal() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        );
+        assert_eq!(a.intersection(&a), a);
+    }
+
+    // cargo test ipset::tests::test_v6_intersection_with_empty
+    #[test]
+    fn test_v6_intersection_with_empty() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        );
+        let empty = IpSetBuilder::<Ipv6Addr>::new().build();
+        assert!(a.intersection(&empty).is_empty());
+        assert!(empty.intersection(&a).is_empty());
+    }
+
+    // cargo test ipset::tests::test_v6_intersection_symmetric
+    #[test]
+    fn test_v6_intersection_symmetric() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 15),
+        );
+        let b = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 25),
+        );
+        assert_eq!(a.intersection(&b), b.intersection(&a));
+    }
+
+    // cargo test ipset::tests::test_v6_intersection_multiple_ranges
+    #[test]
+    fn test_v6_intersection_multiple_ranges() {
+        let mut ba = IpSetBuilder::<Ipv6Addr>::new();
+        ba.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        ));
+        ba.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 50),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 70),
+        ));
+        let a = ba.build();
+
+        let b = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 60),
+        );
+
+        let i = a.intersection(&b);
+        assert_eq!(i.len(), 2);
+        assert_eq!(i.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10));
+        assert_eq!(i.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20));
+        assert_eq!(i.ranges()[1].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 50));
+        assert_eq!(i.ranges()[1].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 60));
+    }
+
+    // cargo test ipset::tests::test_v6_intersection_tied_ends
+    #[test]
+    fn test_v6_intersection_tied_ends() {
+        // Ranges whose start or end exactly coincide
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        );
+        let b = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        );
+        let i = a.intersection(&b);
+        assert_eq!(i.len(), 1);
+        assert_eq!(i.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10));
+        assert_eq!(i.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10));
+    }
+
     // cargo test ipset::tests::test_v6_intersection_subset
     #[test]
     fn test_v6_intersection_subset() {
@@ -2295,6 +2929,98 @@ mod tests {
         assert!(a.intersection(&a.complement()).is_empty());
     }
 
+    // cargo test ipset::tests::test_v6_complement_full_space
+    #[test]
+    fn test_v6_complement_full_space() {
+        // complement(full) == ∅
+        let mut b = IpSetBuilder::<Ipv6Addr>::new();
+        b.add_range(IpRange::new(
+            Ipv6Addr::from(0u128),
+            Ipv6Addr::from(u128::MAX),
+        ));
+        assert!(b.build().complement().is_empty());
+    }
+
+    // cargo test ipset::tests::test_v6_complement_starts_at_zero
+    #[test]
+    fn test_v6_complement_starts_at_zero() {
+        // Set starting at :: — no head gap in complement
+        let a = make_v6_set(Ipv6Addr::from(0u128), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0xff));
+        let c = a.complement();
+        assert_eq!(c.len(), 1);
+        // ::ff is 0xff; next address is 0x100 = ::100
+        assert_eq!(c.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0x100));
+        assert_eq!(c.ranges()[0].end(), Ipv6Addr::from(u128::MAX));
+    }
+
+    // cargo test ipset::tests::test_v6_complement_ends_at_max
+    #[test]
+    fn test_v6_complement_ends_at_max() {
+        // Set ending at ffff:...:ffff — no tail gap in complement
+        let a = make_v6_set(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::from(u128::MAX),
+        );
+        let c = a.complement();
+        assert_eq!(c.len(), 1);
+        assert_eq!(c.ranges()[0].start(), Ipv6Addr::from(0u128));
+        assert_eq!(
+            c.ranges()[0].end(),
+            Ipv6Addr::from(
+                Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0).to_bits() - 1
+            )
+        );
+    }
+
+    // cargo test ipset::tests::test_v6_complement_multiple_ranges
+    #[test]
+    fn test_v6_complement_multiple_ranges() {
+        // Two stored ranges — complement fills head, interior gap, and tail
+        let mut ba = IpSetBuilder::<Ipv6Addr>::new();
+        ba.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        ));
+        ba.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 50),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 60),
+        ));
+        let a = ba.build();
+        let c = a.complement();
+        assert_eq!(c.len(), 3);
+        assert_eq!(c.ranges()[0].start(), Ipv6Addr::from(0u128));
+        assert_eq!(c.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 9));
+        assert_eq!(c.ranges()[1].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 21));
+        assert_eq!(c.ranges()[1].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 49));
+        assert_eq!(c.ranges()[2].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 61));
+        assert_eq!(c.ranges()[2].end(), Ipv6Addr::from(u128::MAX));
+    }
+
+    // cargo test ipset::tests::test_v6_complement_union_is_full
+    #[test]
+    fn test_v6_complement_union_is_full() {
+        // a ∪ complement(a) == full IPv6 space
+        let a = make_v6_set(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0xff),
+        );
+        let full = a.union(&a.complement());
+        assert_eq!(full.len(), 1);
+        assert_eq!(full.ranges()[0].start(), Ipv6Addr::from(0u128));
+        assert_eq!(full.ranges()[0].end(), Ipv6Addr::from(u128::MAX));
+    }
+
+    // cargo test ipset::tests::test_v6_complement_intersection_is_empty
+    #[test]
+    fn test_v6_complement_intersection_is_empty() {
+        // a ∩ complement(a) == ∅
+        let a = make_v6_set(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0xff),
+        );
+        assert!(a.intersection(&a.complement()).is_empty());
+    }
+
     // cargo test ipset::tests::test_v6_complement_empty
     #[test]
     fn test_v6_complement_empty() {
@@ -2384,6 +3110,52 @@ mod tests {
         assert_eq!(b.build().count(), u32::MAX as u128 + 1);
     }
 
+    // cargo test ipset::tests::test_v6_count_single_range
+    #[test]
+    fn test_v6_count_single_range() {
+        // ::0 .. ::9 is 10 addresses
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 9),
+        );
+        assert_eq!(a.count(), 10);
+    }
+
+    // cargo test ipset::tests::test_v6_count_empty
+    #[test]
+    fn test_v6_count_empty() {
+        assert_eq!(IpSetBuilder::<Ipv6Addr>::new().build().count(), 0);
+    }
+
+    // cargo test ipset::tests::test_v6_count_multiple_ranges
+    #[test]
+    fn test_v6_count_multiple_ranges() {
+        // 10 + 5 = 15
+        let mut b = IpSetBuilder::<Ipv6Addr>::new();
+        b.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 9),
+        ));
+        b.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 50),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 54),
+        ));
+        assert_eq!(b.build().count(), 15);
+    }
+
+    // cargo test ipset::tests::test_v6_count_large_range
+    #[test]
+    fn test_v6_count_large_range() {
+        // Full IPv6 space count overflows u128, so test a large but representable range.
+        // ::0 .. ::ffff is 65536 addresses.
+        let mut b = IpSetBuilder::<Ipv6Addr>::new();
+        b.add_range(IpRange::new(
+            Ipv6Addr::from(0u128),
+            Ipv6Addr::from(0xffffu128),
+        ));
+        assert_eq!(b.build().count(), 65536);
+    }
+
     // cargo test ipset::tests::test_v6_count_single_ip
     #[test]
     fn test_v6_count_single_ip() {
@@ -2446,6 +3218,75 @@ mod tests {
         assert!(a.is_superset_of(&empty));
     }
 
+    // cargo test ipset::tests::test_v6_subset_proper
+    #[test]
+    fn test_v6_subset_proper() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        );
+        let b = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 50),
+        );
+        assert!(a.is_subset_of(&b));
+        assert!(!b.is_subset_of(&a));
+    }
+
+    // cargo test ipset::tests::test_v6_superset_proper
+    #[test]
+    fn test_v6_superset_proper() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 50),
+        );
+        let b = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        );
+        assert!(a.is_superset_of(&b));
+        assert!(!b.is_superset_of(&a));
+    }
+
+    // cargo test ipset::tests::test_v6_subset_equal
+    #[test]
+    fn test_v6_subset_equal() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 50),
+        );
+        assert!(a.is_subset_of(&a));
+        assert!(a.is_superset_of(&a));
+    }
+
+    // cargo test ipset::tests::test_v6_subset_disjoint
+    #[test]
+    fn test_v6_subset_disjoint() {
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        );
+        let b = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 30),
+        );
+        assert!(!a.is_subset_of(&b));
+        assert!(!b.is_subset_of(&a));
+    }
+
+    // cargo test ipset::tests::test_v6_empty_subset_of_any
+    #[test]
+    fn test_v6_empty_subset_of_any() {
+        let empty = IpSetBuilder::<Ipv6Addr>::new().build();
+        let a = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 50),
+        );
+        assert!(empty.is_subset_of(&a));
+        assert!(empty.is_subset_of(&empty));
+        assert!(a.is_superset_of(&empty));
+    }
+
     // --- FromIterator ---
 
     // cargo test ipset::tests::test_v4_from_iter_ranges
@@ -2492,6 +3333,40 @@ mod tests {
         assert_eq!(set.len(), 1);
         assert_eq!(set.ranges()[0].start(), Ipv4Addr::new(10, 0, 0, 0));
         assert_eq!(set.ranges()[0].end(), Ipv4Addr::new(10, 0, 0, 255));
+    }
+
+    // cargo test ipset::tests::test_v6_from_iter_prefixes
+    #[test]
+    fn test_v6_from_iter_prefixes() {
+        let prefixes = vec![
+            IpPrefix::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32).unwrap(),
+            IpPrefix::new(Ipv6Addr::new(0x2001, 0xdb9, 0, 0, 0, 0, 0, 0), 32).unwrap(),
+        ];
+        let builder: IpSetBuilder<Ipv6Addr> = prefixes.into_iter().collect();
+        let set = builder.build();
+        assert!(set.contains_ip(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)));
+        assert!(set.contains_ip(Ipv6Addr::new(0x2001, 0xdb9, 0, 0, 0, 0, 0, 1)));
+        assert!(!set.contains_ip(Ipv6Addr::new(0x2001, 0xdba, 0, 0, 0, 0, 0, 1)));
+    }
+
+    // cargo test ipset::tests::test_v6_from_iter_ranges_merges_adjacent
+    #[test]
+    fn test_v6_from_iter_ranges_merges_adjacent() {
+        let ranges = vec![
+            IpRange::new(
+                Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+                Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0x7f),
+            ),
+            IpRange::new(
+                Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0x80),
+                Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0xff),
+            ),
+        ];
+        let set: IpSetBuilder<Ipv6Addr> = ranges.into_iter().collect();
+        let set = set.build();
+        assert_eq!(set.len(), 1);
+        assert_eq!(set.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(set.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0xff));
     }
 
     // cargo test ipset::tests::test_v6_from_iter_ranges
@@ -2570,6 +3445,86 @@ mod tests {
         assert_eq!(count, 2);
     }
 
+    // cargo test ipset::tests::test_v6_for_loop_ref
+    #[test]
+    fn test_v6_for_loop_ref() {
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        ));
+        let set = builder.build();
+        let mut count = 0;
+        for _r in &set {
+            count += 1;
+        }
+        assert_eq!(count, 1);
+    }
+
+    // cargo test ipset::tests::test_v6_into_iter_consuming_yields_ranges
+    #[test]
+    fn test_v6_into_iter_consuming_yields_ranges() {
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        ));
+        let set = builder.build();
+        let ranges: Vec<_> = set.into_iter().collect();
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(ranges[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10));
+    }
+
+    // cargo test ipset::tests::test_v6_into_iter_empty
+    #[test]
+    fn test_v6_into_iter_empty() {
+        let empty = IpSetBuilder::<Ipv6Addr>::new().build();
+        let ranges: Vec<_> = empty.into_iter().collect();
+        assert!(ranges.is_empty());
+    }
+
+    // cargo test ipset::tests::test_v6_into_iter_multi_range
+    #[test]
+    fn test_v6_into_iter_multi_range() {
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        ));
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 30),
+        ));
+        let set = builder.build();
+        let ranges: Vec<_> = set.into_iter().collect();
+        assert_eq!(ranges.len(), 2);
+    }
+
+    // cargo test ipset::tests::test_v6_iter_adapter_chain
+    #[test]
+    fn test_v6_iter_adapter_chain() {
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 10),
+        ));
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0x2001, 0xdb9, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0x2001, 0xdb9, 0, 0, 0, 0, 0, 10),
+        ));
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0x2002, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0x2002, 0, 0, 0, 0, 0, 0, 10),
+        ));
+        let set = builder.build();
+        let count = (&set)
+            .into_iter()
+            .filter(|r| r.start().segments()[0] == 0x2001)
+            .count();
+        assert_eq!(count, 2);
+    }
+
     // cargo test ipset::tests::test_v6_into_iter_ref
     #[test]
     fn test_v6_into_iter_ref() {
@@ -2639,6 +3594,38 @@ mod tests {
         assert_eq!(set.len(), 1);
     }
 
+    // cargo test ipset::tests::test_v6_add_ipset_overlapping
+    #[test]
+    fn test_v6_add_ipset_overlapping() {
+        let other = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 30),
+        );
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        ));
+        builder.add_ipset(&other);
+        let set = builder.build();
+        assert_eq!(set.len(), 1);
+        assert_eq!(set.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(set.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 30));
+    }
+
+    // cargo test ipset::tests::test_v6_add_ipset_empty
+    #[test]
+    fn test_v6_add_ipset_empty() {
+        let empty = IpSetBuilder::<Ipv6Addr>::new().build();
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        ));
+        builder.add_ipset(&empty);
+        assert_eq!(builder.build().len(), 1);
+    }
+
     // cargo test ipset::tests::test_v6_add_ipset
     #[test]
     fn test_v6_add_ipset() {
@@ -2656,6 +3643,106 @@ mod tests {
         assert_eq!(set.len(), 2);
         assert!(set.contains_ip(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)));
         assert!(set.contains_ip(Ipv6Addr::new(0x2001, 0xdb9, 0, 0, 0, 0, 0, 1)));
+    }
+
+    // cargo test ipset::tests::test_v6_remove_ipset_exact
+    #[test]
+    fn test_v6_remove_ipset_exact() {
+        let to_remove = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        );
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        ));
+        builder.remove_ipset(&to_remove);
+        assert!(builder.build().is_empty());
+    }
+
+    // cargo test ipset::tests::test_v6_remove_ipset_partial
+    #[test]
+    fn test_v6_remove_ipset_partial() {
+        // Remove first half — right piece survives
+        let to_remove = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        );
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        ));
+        builder.remove_ipset(&to_remove);
+        let set = builder.build();
+        assert_eq!(set.len(), 1);
+        assert_eq!(set.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 11));
+        assert_eq!(set.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20));
+    }
+
+    // cargo test ipset::tests::test_v6_remove_ipset_disjoint
+    #[test]
+    fn test_v6_remove_ipset_disjoint() {
+        // Removing a non-overlapping set is a no-op
+        let to_remove = make_v6_set(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 50),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 60),
+        );
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        ));
+        builder.remove_ipset(&to_remove);
+        let set = builder.build();
+        assert_eq!(set.len(), 1);
+        assert_eq!(set.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(set.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20));
+    }
+
+    // cargo test ipset::tests::test_v6_remove_ipset_empty
+    #[test]
+    fn test_v6_remove_ipset_empty() {
+        let empty = IpSetBuilder::<Ipv6Addr>::new().build();
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+        ));
+        builder.remove_ipset(&empty);
+        assert_eq!(builder.build().len(), 1);
+    }
+
+    // cargo test ipset::tests::test_v6_remove_ipset_multi_range
+    #[test]
+    fn test_v6_remove_ipset_multi_range() {
+        // Removing a multi-range set punches multiple holes
+        let mut rb = IpSetBuilder::<Ipv6Addr>::new();
+        rb.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 20),
+        ));
+        rb.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 50),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 60),
+        ));
+        let to_remove = rb.build();
+
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_range(IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 100),
+        ));
+        builder.remove_ipset(&to_remove);
+        let set = builder.build();
+        assert_eq!(set.len(), 3);
+        assert_eq!(set.ranges()[0].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(set.ranges()[0].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 9));
+        assert_eq!(set.ranges()[1].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 21));
+        assert_eq!(set.ranges()[1].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 49));
+        assert_eq!(set.ranges()[2].start(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 61));
+        assert_eq!(set.ranges()[2].end(), Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 100));
     }
 
     // cargo test ipset::tests::test_v4_remove_ipset_exact

@@ -450,6 +450,29 @@ mod tests {
         assert!(!range.contains(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)));
     }
 
+    // cargo test range::tests::test_v6_contains_boundaries
+    #[test]
+    fn test_v6_contains_boundaries() {
+        let range = IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0x10),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0x20),
+        );
+
+        assert!(range.contains(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0x10))); // start inclusive
+        assert!(range.contains(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0x20))); // end inclusive
+
+        assert!(!range.contains(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0x0f))); // just before start
+        assert!(!range.contains(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0x21))); // just after end
+    }
+
+    // cargo test range::tests::test_v6_contains_start_eq_end
+    #[test]
+    fn test_v6_contains_start_eq_end() {
+        let ip = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+        let range = IpRange::new(ip, ip);
+        assert!(range.contains(ip));
+    }
+
     // --- Zero / Unspecified ---
 
     // cargo test range::tests::test_v4_is_zero
@@ -963,6 +986,38 @@ mod tests {
         assert_eq!(p.mask(), 128);
     }
 
+    // cargo test range::tests::test_v6_prefix_unaligned_span
+    #[test]
+    fn test_v6_prefix_unaligned_span() {
+        // 3 addresses is not a power of two → None
+        let range = IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 3),
+        );
+        assert!(range.prefix().is_none());
+    }
+
+    // cargo test range::tests::test_v6_prefix_misaligned_start
+    #[test]
+    fn test_v6_prefix_misaligned_start() {
+        // size 2 but start has no trailing zero → misaligned
+        let range = IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 2),
+        );
+        assert!(range.prefix().is_none());
+    }
+
+    // cargo test range::tests::test_v6_prefix_invalid_range
+    #[test]
+    fn test_v6_prefix_invalid_range() {
+        let range = IpRange::new(
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0xff),
+            Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0x10),
+        );
+        assert!(range.prefix().is_none());
+    }
+
     // --- Display ---
 
     // cargo test range::tests::test_v4_display
@@ -1072,6 +1127,42 @@ mod tests {
         let s = "2001:db8::1..2001:db8::ff";
         let r: IpRange<Ipv6Addr> = s.parse().unwrap();
         assert_eq!(r.to_string(), s);
+    }
+
+    // cargo test range::tests::test_v6_parse_single_ip
+    #[test]
+    fn test_v6_parse_single_ip() {
+        let r: IpRange<Ipv6Addr> = "2001:db8::1..2001:db8::1".parse().unwrap();
+        assert_eq!(r.start(), r.end());
+        assert!(r.is_valid());
+    }
+
+    // cargo test range::tests::test_v6_parse_inverted_is_representable
+    #[test]
+    fn test_v6_parse_inverted_is_representable() {
+        // Parsing succeeds; is_valid() returns false
+        let r: IpRange<Ipv6Addr> = "2001:db8::ff..2001:db8::1".parse().unwrap();
+        assert!(!r.is_valid());
+    }
+
+    // cargo test range::tests::test_v6_parse_missing_separator
+    #[test]
+    fn test_v6_parse_missing_separator() {
+        // Common mistake: using '-' instead of '..'
+        let err = "2001:db8::1-2001:db8::ff"
+            .parse::<IpRange<Ipv6Addr>>()
+            .unwrap_err();
+        assert_eq!(err, ParseRangeError::MissingSeparator);
+    }
+
+    // cargo test range::tests::test_v6_parse_invalid_end
+    #[test]
+    fn test_v6_parse_invalid_end() {
+        // IPv4 notation is not a valid Ipv6Addr end
+        let err = "2001:db8::1..192.168.1.1"
+            .parse::<IpRange<Ipv6Addr>>()
+            .unwrap_err();
+        assert_eq!(err, ParseRangeError::InvalidEnd);
     }
 
     // cargo test range::tests::test_v6_parse_rejects_v4_address
