@@ -2,7 +2,7 @@ use crate::{
     interfaces::IpAddress,
     prefix::IpPrefix,
     range::IpRange,
-    tools::range::normalize,
+    tools::range::{merge_sorted, normalize},
 };
 
 /// A builder for constructing a normalized [`IpSet`].
@@ -530,13 +530,25 @@ impl<A: IpAddress> IpSet<A> {
     /// ```
     #[must_use]
     pub fn union(&self, other: &IpSet<A>) -> IpSet<A> {
-        // Collect all ranges from both sets into one Vec, then normalize.
-        // normalize sorts and merges adjacent/overlapping spans, so the result
-        // satisfies the IpSet invariant regardless of input order.
-        let mut ranges = Vec::with_capacity(self.ranges.len() + other.ranges.len());
-        ranges.extend_from_slice(&self.ranges);
-        ranges.extend_from_slice(&other.ranges);
-        IpSet::new(normalize(ranges))
+        // Both sets are already sorted. Merge the two sorted slices in O(m+n)
+        // via a two-pointer walk rather than concatenating and re-sorting in
+        // O((m+n) log(m+n)). merge_sorted then collapses adjacent/overlapping
+        // spans produced by the interleaving.
+        let mut merged = Vec::with_capacity(self.ranges.len() + other.ranges.len());
+        let mut i = 0;
+        let mut j = 0;
+        while i < self.ranges.len() && j < other.ranges.len() {
+            if self.ranges[i].start() <= other.ranges[j].start() {
+                merged.push(self.ranges[i]);
+                i += 1;
+            } else {
+                merged.push(other.ranges[j]);
+                j += 1;
+            }
+        }
+        merged.extend_from_slice(&self.ranges[i..]);
+        merged.extend_from_slice(&other.ranges[j..]);
+        IpSet::new(merge_sorted(merged))
     }
 
     /// Returns a new set containing every address that is in `self` but not in
