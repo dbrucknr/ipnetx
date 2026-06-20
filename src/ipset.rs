@@ -378,9 +378,10 @@ impl<A: IpAddress> IpSet<A> {
 
     /// Returns the total number of IP addresses in the set.
     ///
-    /// Each stored range contributes `end - start + 1` addresses.  The return
-    /// type is `u128` so that an IPv6 set covering the entire address space
-    /// (2¹²⁸ addresses) can be represented exactly.
+    /// Each stored range contributes `end - start + 1` addresses. For an IPv6
+    /// set covering the entire address space (2¹²⁸ addresses), the true count
+    /// cannot fit in `u128`; this method saturates at `u128::MAX` in that case.
+    /// Use [`count_checked`](IpSet::count_checked) to detect the overflow.
     ///
     /// See [`len`](IpSet::len) to get the number of stored *ranges* instead.
     ///
@@ -400,10 +401,41 @@ impl<A: IpAddress> IpSet<A> {
     /// ```
     #[must_use]
     pub fn count(&self) -> u128 {
-        self.ranges
-            .iter()
-            .map(|r| r.end().to_u128() - r.start().to_u128() + 1)
-            .sum()
+        self.ranges.iter().fold(0u128, |acc, r| {
+            acc.saturating_add(
+                (r.end().to_u128() - r.start().to_u128()).saturating_add(1),
+            )
+        })
+    }
+
+    /// Returns the total number of IP addresses in the set, or `None` if the
+    /// count exceeds `u128::MAX`.
+    ///
+    /// This can only return `None` for an IPv6 set that covers the entire
+    /// address space (2¹²⁸ addresses). For all other sets, including any IPv4
+    /// set, the result is always `Some`. Use [`count`](IpSet::count) when you
+    /// are certain the set cannot span the full IPv6 address space.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::net::Ipv4Addr;
+    /// use ipnetx::ipset::IpSetBuilder;
+    /// use ipnetx::range::IpRange;
+    ///
+    /// let mut b = IpSetBuilder::<Ipv4Addr>::new();
+    /// b.add_range(IpRange::new(Ipv4Addr::new(10, 0, 0, 0), Ipv4Addr::new(10, 0, 0, 9)));
+    /// let set = b.build();
+    ///
+    /// assert_eq!(set.count_checked(), Some(10));
+    /// ```
+    #[must_use]
+    pub fn count_checked(&self) -> Option<u128> {
+        self.ranges.iter().try_fold(0u128, |acc, r| {
+            let range_count =
+                (r.end().to_u128() - r.start().to_u128()).checked_add(1)?;
+            acc.checked_add(range_count)
+        })
     }
 
     /// Returns `true` if every address in `self` is also contained in `other`.
@@ -3107,7 +3139,9 @@ mod tests {
             Ipv4Addr::new(0, 0, 0, 0),
             Ipv4Addr::new(255, 255, 255, 255),
         ));
-        assert_eq!(b.build().count(), u32::MAX as u128 + 1);
+        let set = b.build();
+        assert_eq!(set.count(), u32::MAX as u128 + 1);
+        assert_eq!(set.count_checked(), Some(u32::MAX as u128 + 1));
     }
 
     // cargo test ipset::tests::test_v6_count_single_range
@@ -3146,14 +3180,30 @@ mod tests {
     // cargo test ipset::tests::test_v6_count_large_range
     #[test]
     fn test_v6_count_large_range() {
-        // Full IPv6 space count overflows u128, so test a large but representable range.
         // ::0 .. ::ffff is 65536 addresses.
         let mut b = IpSetBuilder::<Ipv6Addr>::new();
         b.add_range(IpRange::new(
             Ipv6Addr::from(0u128),
             Ipv6Addr::from(0xffffu128),
         ));
-        assert_eq!(b.build().count(), 65536);
+        let set = b.build();
+        assert_eq!(set.count(), 65536);
+        assert_eq!(set.count_checked(), Some(65536));
+    }
+
+    // cargo test ipset::tests::test_v6_count_full_space
+    #[test]
+    fn test_v6_count_full_space() {
+        // The full IPv6 space holds 2^128 addresses, which overflows u128.
+        // count() saturates at u128::MAX; count_checked() returns None.
+        let mut b = IpSetBuilder::<Ipv6Addr>::new();
+        b.add_range(IpRange::new(
+            Ipv6Addr::from(0u128),
+            Ipv6Addr::from(u128::MAX),
+        ));
+        let set = b.build();
+        assert_eq!(set.count(), u128::MAX);
+        assert_eq!(set.count_checked(), None);
     }
 
     // cargo test ipset::tests::test_v6_count_single_ip
