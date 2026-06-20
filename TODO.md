@@ -125,7 +125,7 @@ route analysis, threat intelligence ingestion, and network auditing.
 ### Priority 4 - invariants + correctness
 
 - **proptests** ✅ — 97 property tests covering algebraic laws, round-trips, and normalization invariants for both IPv4 and IPv6, including cross-validation of `difference` against `intersection_with_complement`.
-- **cargo fuzz** — Fuzz testing for security and edge cases.
+- **cargo fuzz** ✅ — Four targets: `parse_range`, `parse_prefix`, `ipset_ops`, `ipset_builder`. Seed corpus checked in. CI smoke run (30 s/target) via `fuzz.yml`. See `FUZZING.md`.
 
 ---
 

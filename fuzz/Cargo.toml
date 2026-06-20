@@ -1,0 +1,43 @@
+[package]
+name = "ipnetx-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+
+[dependencies.ipnetx]
+path = ".."
+
+# Keep debug info so crash stack traces are readable.
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "parse_range"
+path = "fuzz_targets/parse_range.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "parse_prefix"
+path = "fuzz_targets/parse_prefix.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "ipset_ops"
+path = "fuzz_targets/ipset_ops.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "ipset_builder"
+path = "fuzz_targets/ipset_builder.rs"
+test = false
+doc = false

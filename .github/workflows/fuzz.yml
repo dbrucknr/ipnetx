@@ -1,0 +1,46 @@
+name: Fuzz (smoke)
+
+# Run a short fuzzing session on every push to main and on demand.
+# Each target runs for 30 seconds — enough to catch obvious panics and
+# regressions against the seed corpus, not a substitute for continuous fuzzing.
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - parse_range
+          - parse_prefix
+          - ipset_ops
+          - ipset_builder
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install nightly toolchain
+        run: rustup toolchain install nightly --no-self-update
+
+      - name: Install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz --locked
+
+      - name: Run fuzz target (${{ matrix.target }}, 30 s)
+        run: |
+          cargo +nightly fuzz run ${{ matrix.target }} \
+            fuzz/corpus/${{ matrix.target }} \
+            -- -max_total_time=30 -max_len=4096
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: |
+            fuzz/artifacts/${{ matrix.target }}/
