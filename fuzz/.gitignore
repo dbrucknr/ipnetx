@@ -2,6 +2,7 @@
 # Hand-crafted seeds live in fuzz/seeds/ and are tracked.
 corpus/
 artifacts/
+target/
 
 # ipset_ops and ipset_builder take structured binary input; no hand-crafted seeds.
 seeds/ipset_ops/
