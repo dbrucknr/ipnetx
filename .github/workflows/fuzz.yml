@@ -33,6 +33,7 @@ jobs:
 
       - name: Run fuzz target (${{ matrix.target }}, 30 s)
         run: |
+          mkdir -p fuzz/seeds/${{ matrix.target }}
           cargo +nightly fuzz run ${{ matrix.target }} \
             fuzz/seeds/${{ matrix.target }} \
             -- -max_total_time=30 -max_len=4096
