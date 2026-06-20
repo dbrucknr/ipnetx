@@ -23,14 +23,18 @@ cargo +nightly install cargo-fuzz --locked
 From the repository root:
 
 ```sh
-# Run a single target indefinitely (Ctrl-C to stop)
-cargo +nightly fuzz run parse_range
+# Run a single target indefinitely against the seed corpus (Ctrl-C to stop)
+cargo +nightly fuzz run parse_range fuzz/seeds/parse_range
+
+# Run with a local corpus dir so coverage-increasing inputs are saved
+mkdir -p fuzz/corpus/parse_range
+cargo +nightly fuzz run parse_range fuzz/corpus/parse_range fuzz/seeds/parse_range
 
 # Run with a time limit (seconds)
-cargo +nightly fuzz run ipset_ops -- -max_total_time=300
+cargo +nightly fuzz run ipset_ops fuzz/seeds/ipset_ops -- -max_total_time=300
 
 # Run with a length limit (bytes) — useful on resource-constrained machines
-cargo +nightly fuzz run ipset_builder -- -max_total_time=60 -max_len=4096
+cargo +nightly fuzz run ipset_builder fuzz/seeds/ipset_builder -- -max_total_time=60 -max_len=4096
 
 # List all targets
 cargo +nightly fuzz list
@@ -45,11 +49,14 @@ cargo +nightly fuzz run parse_range -s none -- -max_total_time=300
 
 ## Seed corpus
 
-`fuzz/corpus/<target>/` contains seed inputs that give the fuzzer a head start.
-Seeds are checked in and cover boundary cases (full address space, single IPs, host-bits-set prefixes, etc.).
+`fuzz/seeds/<target>/` contains hand-crafted seed inputs that give the fuzzer
+a head start. Seeds are checked in and cover boundary cases (full address
+space, single IPs, host-bits-set prefixes, etc.).
 
-libFuzzer automatically saves any inputs that increase code coverage into the
-corpus directory, so the corpus grows over time as you fuzz.
+libFuzzer automatically saves coverage-increasing inputs into the corpus
+directory you point it at. Auto-generated corpus files are gitignored
+(`fuzz/corpus/` and `fuzz/artifacts/`); pass a local corpus dir to persist
+them between runs:
 
 ## Investigating a crash
 

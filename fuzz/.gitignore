@@ -1,0 +1,4 @@
+# Auto-generated corpus and crash artifacts — do not commit.
+# Hand-crafted seeds live in fuzz/seeds/ and are tracked.
+corpus/
+artifacts/
