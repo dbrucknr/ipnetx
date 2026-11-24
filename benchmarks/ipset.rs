@@ -13,48 +13,66 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::hint::black_box;
 use ipnetx::ipset::{IpSet, IpSetBuilder};
+use ipnetx::prefix::IpPrefix;
 use ipnetx::range::IpRange;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Builds an `IpSet` of `count` non-overlapping /24 blocks, offset by `start`.
+/// Returns the `idx`-th /24 block in the benchmark address layout.
 ///
-/// Ranges are laid out across the `10.x.y.0/24` space:
-///   start=0,   count=3 → [10.0.0.0/24, 10.0.1.0/24, 10.0.2.0/24]
-///   start=100, count=3 → [10.0.100.0/24, 10.0.101.0/24, 10.0.102.0/24]
+/// Blocks are laid out with a stride of two /24s (`10.0.0.0/24`, `10.0.2.0/24`,
+/// ...), so **adjacent indices are never adjacent in address space**. This
+/// matters: `IpSetBuilder::build` merges touching ranges, so a layout of
+/// back-to-back /24s collapses to a single stored range regardless of `count`
+/// and every benchmark would silently measure a one-element set.
+fn block(idx: u32) -> IpRange<Ipv4Addr> {
+    let n = idx * 2;
+    let b2 = ((n / 256) % 256) as u8;
+    let b3 = (n % 256) as u8;
+    IpRange::new(Ipv4Addr::new(10, b2, b3, 0), Ipv4Addr::new(10, b2, b3, 255))
+}
+
+/// Builds an `IpSet` of `count` separated /24 blocks, offset by `start`.
 ///
-/// Using a non-zero `start` lets two calls produce sets that partially overlap,
-/// which is the interesting case for intersection and difference.
+/// Block indices `start..start + count` are used, so two calls with different
+/// `start` values produce sets that partially overlap, which is the interesting
+/// case for intersection and difference. Asserts that the stored range count
+/// equals `count`, so a layout change that causes merging fails loudly.
 fn make_set(start: u32, count: u32) -> IpSet<Ipv4Addr> {
     let mut builder = IpSetBuilder::<Ipv4Addr>::new();
     for i in start..start + count {
-        let b2 = ((i / 256) % 256) as u8;
-        let b3 = (i % 256) as u8;
-        builder.add_range(IpRange::new(
-            Ipv4Addr::new(10, b2, b3, 0),
-            Ipv4Addr::new(10, b2, b3, 255),
-        ));
+        builder.add_range(block(i));
     }
-    builder.build()
+    let set = builder.build();
+    assert_eq!(set.len(), count as usize, "make_set must not merge ranges");
+    set
 }
 
-/// Returns the raw (unsorted, not yet built) ranges for `count` /24 blocks,
-/// enumerated in reverse order so `build()` has real sorting work to do.
+/// Returns the raw (unsorted, not yet built) ranges for `count` separated
+/// /24 blocks, enumerated in reverse order so `build()` has real sorting work.
 fn make_raw_ranges(count: u32) -> Vec<IpRange<Ipv4Addr>> {
-    (0..count)
-        .rev()
-        .map(|i| {
-            let b2 = ((i / 256) % 256) as u8;
-            let b3 = (i % 256) as u8;
-            IpRange::new(
-                Ipv4Addr::new(10, b2, b3, 0),
-                Ipv4Addr::new(10, b2, b3, 255),
-            )
-        })
-        .collect()
+    (0..count).rev().map(block).collect()
+}
+
+/// IPv6 counterpart of [`make_set`]: `count` separated /48 blocks under
+/// `2001:db8::/32`, stride of two /48s.
+fn v6_block(idx: u32) -> IpPrefix<Ipv6Addr> {
+    let n = idx * 2;
+    IpPrefix::new(Ipv6Addr::new(0x2001, 0xdb8, n as u16, 0, 0, 0, 0, 0), 48).unwrap()
+}
+
+fn make_set_v6(count: u32) -> IpSet<Ipv6Addr> {
+    assert!(count * 2 <= u16::MAX as u32);
+    let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+    for i in 0..count {
+        builder.add_prefix(v6_block(i));
+    }
+    let set = builder.build();
+    assert_eq!(set.len(), count as usize, "make_set_v6 must not merge ranges");
+    set
 }
 
 /// Builds an `IpSet` of `count` unaligned ranges.
@@ -72,7 +90,9 @@ fn make_unaligned_set(count: u32) -> IpSet<Ipv4Addr> {
             Ipv4Addr::new(10, b2, b3, 254),
         ));
     }
-    builder.build()
+    let set = builder.build();
+    assert_eq!(set.len(), count as usize, "make_unaligned_set must not merge ranges");
+    set
 }
 
 /// Builds an `IpSet` of `count` non-merging ranges with a gap between each.
@@ -92,7 +112,9 @@ fn make_sparse_set(start_offset: u32, count: u32) -> IpSet<Ipv4Addr> {
             Ipv4Addr::new(10, b2, b3, 100),
         ));
     }
-    builder.build()
+    let set = builder.build();
+    assert_eq!(set.len(), count as usize, "make_sparse_set must not merge ranges");
+    set
 }
 
 // ---------------------------------------------------------------------------
@@ -104,12 +126,70 @@ fn bench_contains_ip(c: &mut Criterion) {
     let mut group = c.benchmark_group("contains_ip");
     for &size in &[100u32, 1_000, 10_000] {
         let set = make_set(0, size);
-        // Pick an IP near the middle of the set — exercises a representative
-        // number of binary search comparisons.
-        let mid = size / 2;
-        let ip = Ipv4Addr::new(10, ((mid / 256) % 256) as u8, (mid % 256) as u8, 128);
-        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
-            b.iter(|| set.contains_ip(black_box(ip)));
+        // An IP inside the middle block, and one in the gap just after it.
+        let mid = block(size / 2);
+        let hit = Ipv4Addr::from_bits(mid.start().to_bits() + 128);
+        let miss = Ipv4Addr::from_bits(mid.end().to_bits() + 128);
+        assert!(set.contains_ip(hit) && !set.contains_ip(miss));
+        group.bench_with_input(BenchmarkId::new("hit", size), &size, |b, _| {
+            b.iter(|| set.contains_ip(black_box(hit)));
+        });
+        group.bench_with_input(BenchmarkId::new("miss", size), &size, |b, _| {
+            b.iter(|| set.contains_ip(black_box(miss)));
+        });
+    }
+    group.finish();
+}
+
+/// Whole-range and whole-prefix membership — the route-policy hot path.
+///
+/// `contains_range` and `contains_prefix` should cost the same; both are
+/// included so any divergence is visible. Cases per size:
+///   hit  — a /26 inside the middle stored block (host bits set in the input).
+///   gap  — a /24 sitting in the gap between two stored blocks.
+///   span — a /23 covering a stored block *and* the gap after it: both
+///          endpoints would pass `contains_ip` individually only if the gap
+///          were filled, so this exercises the "single enclosing range" rule.
+/// IPv6 gets the same treatment on /48 blocks.
+fn bench_contains_prefix(c: &mut Criterion) {
+    let mut group = c.benchmark_group("contains_prefix");
+    for &size in &[100u32, 1_000, 10_000] {
+        let set = make_set(0, size);
+        let mid = block(size / 2).start().to_bits();
+        let hit = IpPrefix::new(Ipv4Addr::from_bits(mid + 64 + 5), 26).unwrap();
+        let gap = IpPrefix::new(Ipv4Addr::from_bits(mid + 256), 24).unwrap();
+        let span = IpPrefix::new(Ipv4Addr::from_bits(mid), 23).unwrap();
+        assert!(set.contains_prefix(hit) && !set.contains_prefix(gap) && !set.contains_prefix(span));
+
+        group.bench_with_input(BenchmarkId::new("v4_hit", size), &size, |b, _| {
+            b.iter(|| set.contains_prefix(black_box(hit)));
+        });
+        group.bench_with_input(BenchmarkId::new("v4_gap", size), &size, |b, _| {
+            b.iter(|| set.contains_prefix(black_box(gap)));
+        });
+        group.bench_with_input(BenchmarkId::new("v4_span", size), &size, |b, _| {
+            b.iter(|| set.contains_prefix(black_box(span)));
+        });
+        // The pre-contains_prefix spelling used by pathvector-policy, kept as a baseline.
+        group.bench_with_input(BenchmarkId::new("v4_hit_range_form", size), &size, |b, _| {
+            b.iter(|| set.contains_range(black_box(hit).masked().to_range()));
+        });
+
+        let set6 = make_set_v6(size);
+        let base = v6_block(size / 2);
+        let hit6 = IpPrefix::new(
+            Ipv6Addr::from_bits(base.ip().to_bits() + (1u128 << 70) + 7),
+            64,
+        )
+        .unwrap();
+        // /48 immediately after the middle block: the stride leaves it unstored.
+        let gap6 = IpPrefix::new(Ipv6Addr::from_bits(base.ip().to_bits() + (1u128 << 80)), 48).unwrap();
+        assert!(set6.contains_prefix(hit6) && !set6.contains_prefix(gap6));
+        group.bench_with_input(BenchmarkId::new("v6_hit", size), &size, |b, _| {
+            b.iter(|| set6.contains_prefix(black_box(hit6)));
+        });
+        group.bench_with_input(BenchmarkId::new("v6_gap", size), &size, |b, _| {
+            b.iter(|| set6.contains_prefix(black_box(gap6)));
         });
     }
     group.finish();
@@ -223,21 +303,8 @@ fn bench_count(c: &mut Criterion) {
 fn bench_build_with_removals(c: &mut Criterion) {
     let mut group = c.benchmark_group("build_with_removals");
     for &size in &[100u32, 1_000, 10_000] {
-        let raw_adds: Vec<IpRange<Ipv4Addr>> = (0..size)
-            .rev()
-            .map(|i| {
-                let b2 = ((i / 256) % 256) as u8;
-                let b3 = (i % 256) as u8;
-                IpRange::new(Ipv4Addr::new(10, b2, b3, 0), Ipv4Addr::new(10, b2, b3, 255))
-            })
-            .collect();
-        let raw_removes: Vec<IpRange<Ipv4Addr>> = (size / 2..size)
-            .map(|i| {
-                let b2 = ((i / 256) % 256) as u8;
-                let b3 = (i % 256) as u8;
-                IpRange::new(Ipv4Addr::new(10, b2, b3, 0), Ipv4Addr::new(10, b2, b3, 255))
-            })
-            .collect();
+        let raw_adds = make_raw_ranges(size);
+        let raw_removes: Vec<IpRange<Ipv4Addr>> = (size / 2..size).map(block).collect();
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
             b.iter(|| {
                 let mut builder = IpSetBuilder::<Ipv4Addr>::new();
@@ -330,6 +397,7 @@ fn bench_ipset_prefixes(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_contains_ip,
+    bench_contains_prefix,
     bench_build,
     bench_build_with_removals,
     bench_union,
