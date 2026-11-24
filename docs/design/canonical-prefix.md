@@ -72,7 +72,7 @@ unrepresentable; it is not the remedy for #71.
 ```rust
 // SKETCH — not implemented.
 
-/// A prefix whose host bits are guaranteed zero. Same layout as IpPrefix.
+/// A prefix whose host bits are guaranteed zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CanonicalPrefix<A: IpAddress> { ip: A, mask: u8 }   // fields private
 
@@ -126,7 +126,9 @@ Design choices and why:
   dumps for free. (Ordering is meaningful only because equal networks are
   equal values.)
 - **No `Deref` to `IpPrefix`**; explicit `as_prefix()` / `From`.
-- **Layout is unchanged** (same two fields), so no memory cost in a RIB.
+- **Representation:** the proposed type has the same fields as `IpPrefix`.
+  Rust layout and downstream RIB memory costs must be checked before making
+  a size or ABI guarantee.
 - **Opt-in.** `IpPrefix` behavior is unchanged; nothing breaks for existing
   users of `ipnetx`.
 
@@ -134,11 +136,13 @@ Design choices and why:
 
 ### 3.1 pathvector `Nlri`
 
-Make `Nlri<A>` wrap `CanonicalPrefix<A>` instead of `IpPrefix<A>`. Its
+One possible, separately decided adoption would make `Nlri<A>` wrap
+`CanonicalPrefix<A>` instead of `IpPrefix<A>`. Its
 derived `Hash`/`Eq` then mean "same network" by construction, and every map
 in §1.2 is correct by type instead of by convention (and §1.3 becomes
-unrepresentable). pathvector is pre-1.0, so a workspace-internal breaking
-change is cheap.
+unrepresentable). This is a semantic API migration whose costs have not
+been established; being pre-1.0 does not establish that it is cheap. It is
+not proposed as part of the standalone predicate or as the fix for #71.
 
 Because the wrapped type masks on construction, **`Nlri::new` can keep its
 signature** (`Result<_, InvalidPrefixLen>`) while its documented behavior
@@ -154,7 +158,7 @@ Today every mutating/query method masks its argument. Candidate adoptions:
 
 | Option | Shape | Status |
 |---|---|---|
-| (a) Take `CanonicalPrefix<A>` only; iterators/`longest_match_entry` return it | breaking → routemap 0.2.0 | **Leading candidate, undecided.** Clean contract |
+| (a) Take `CanonicalPrefix<A>` only; iterators/`longest_match_entry` return it | breaking → routemap 0.2.0 | **Undecided.** Requires validation against real signatures and callers |
 | (b) Generic `impl Into<CanonicalPrefix<A>>` for source compatibility | additive | **Inference breakage confirmed on a minimal model** (below); may still be viable with annotations or a different shape |
 | (c) Parallel `*_canonical` methods | additive | Doubles the API surface; only worth it as a transition |
 
@@ -234,7 +238,9 @@ today is correctness-by-construction (§1.3), not speed.
 
 ## 5. Staging
 
-Each stage is independently shippable and reviewable:
+These are independent proposals, not an approved migration sequence. The
+standalone `PrefixMatch` implementation is the current next step; none of
+the decisions below is required for it:
 
 1. **ipnetx** (additive; a 0.3.x release): `CanonicalPrefix`, conversions,
    tests (idempotence, strict/lenient, `Ord`, `Hash` agrees with network
@@ -242,15 +248,19 @@ Each stage is independently shippable and reviewable:
 2. **routemap**: **decision gate** — complete the §3.2 spike items 1–4
    first, then choose (a)/(b)/(c). Any breaking release (0.2.0) follows
    that decision, not the other way round. Add an ancestor-walk/`covering`
-   API here only if `prefix-length-matching.md` option C is pursued.
-3. **pathvector-types / -rib / -session**: `Nlri` over `CanonicalPrefix`;
+   API through its own proposal in `routemap-covering-iterator.md`,
+   independently of canonical-type adoption.
+3. **Possible pathvector-types / -rib / -session adoption**, separately
+   reviewed: `Nlri` over `CanonicalPrefix`;
    `from_wire`; delete `blackhole.rs` host-bit check and the `testutil`
    fixture. The `LocRib` inconsistency (§1.3) is already reproduced and
    tracked as pathvector #71, with acceptance criteria (IPv4/IPv6,
    non-octet-aligned prefixes, host-bit variants, lookup/withdrawal through
    canonical and non-canonical forms); it is fixed independently and is not
    a prerequisite or a justification for this stage.
-4. **pathvector-rpki**: switch `validate` to the covering iteration.
+4. **Possible pathvector-rpki adoption**, separately reviewed: switch
+   `validate` to covering iteration only after differential validation
+   against the current consumer. It does not require a canonical type.
 
 ## 6. Risks and open questions
 
