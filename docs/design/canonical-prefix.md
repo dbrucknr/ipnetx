@@ -72,10 +72,15 @@ pub struct CanonicalPrefix<A: IpAddress> { ip: A, mask: u8 }   // fields private
 pub enum CanonicalPrefixError { InvalidLen, HostBitsSet }
 
 impl<A: IpAddress> CanonicalPrefix<A> {
-    /// Strict: rejects host bits.
-    pub fn new(ip: A, mask: u8) -> Result<Self, CanonicalPrefixError>;
-    /// Lenient: zeroes host bits (the `IpPrefix::masked` behavior).
-    pub fn new_masked(ip: A, mask: u8) -> Result<Self, InvalidPrefixLen>;
+    /// Normalizing constructor: zeroes host bits (the `IpPrefix::masked`
+    /// behavior). This ALONE guarantees the invariant — every value of the
+    /// type is canonical regardless of how it was built.
+    pub fn new(ip: A, mask: u8) -> Result<Self, InvalidPrefixLen>;
+
+    /// Validation helper (optional, a caller-policy convenience): like `new`
+    /// but returns `HostBitsSet` instead of masking. Does not strengthen the
+    /// invariant; it only lets a caller reject non-canonical *input*.
+    pub fn try_new_strict(ip: A, mask: u8) -> Result<Self, CanonicalPrefixError>;
 
     pub fn ip(&self) -> A;
     pub fn mask(&self) -> u8;
@@ -87,19 +92,28 @@ impl<A: IpAddress> IpPrefix<A> {
     pub fn canonical(&self) -> CanonicalPrefix<A>;            // masks
 }
 impl<A> From<CanonicalPrefix<A>> for IpPrefix<A> { .. }      // free
-impl<A> TryFrom<IpPrefix<A>> for CanonicalPrefix<A> { .. }   // strict
-impl<A> FromStr for CanonicalPrefix<A> { .. }                // strict
+impl<A> FromStr for CanonicalPrefix<A> { .. }                // policy: see below
 ```
 
 Design choices and why:
 
 - **Private fields, no `unsafe`, no unchecked constructor.** The invariant is
   the whole point; an escape hatch defeats it. A consumer that already holds
-  masked bits just calls `new_masked`, whose cost is the masking we are
+  masked bits just calls `new`, whose cost is the masking we are
   discussing in §4.
-- **`FromStr` is strict.** A canonical type that silently accepts
-  `10.0.0.1/8` is not canonical-by-construction in a useful sense. Callers
-  wanting leniency parse `IpPrefix` then `.canonical()`.
+- **Normalization and validation are different things.** A constructor that
+  masks input still yields canonical output, so canonical-by-construction
+  storage does **not** require strict parsing. Rejecting host bits is a
+  *configuration policy* (useful where a user typing `10.0.0.1/8` has
+  probably made a mistake, irrelevant for wire decode where trailing bits
+  are legal and must simply be dropped). The type supplies both tools
+  (`new`, `try_new_strict`) and callers choose.
+- **`FromStr` policy is an open question** (§6), not a requirement of the
+  design: masking `FromStr` keeps routemap-style call sites such as
+  `table.get("10.0.0.1/8".parse().unwrap())` working; strict `FromStr`
+  surfaces mistakes earlier but would turn today's masking-dependent
+  doctests/tests into runtime failures. Either choice preserves the
+  invariant.
 - **Derive `Ord`.** `IpPrefix` has none today. A canonical type can have a
   total order `(ip, mask)`, giving `BTreeMap` keys and deterministic RIB
   dumps for free. (Ordering is meaningful only because equal networks are
@@ -119,27 +133,60 @@ in §1.2 is correct by type instead of by convention (and §1.3 becomes
 unrepresentable). pathvector is pre-1.0, so a workspace-internal breaking
 change is cheap.
 
-Constructors need to separate two intents that `Nlri::new` currently blurs:
+Because the wrapped type masks on construction, **`Nlri::new` can keep its
+signature** (`Result<_, InvalidPrefixLen>`) while its documented behavior
+changes from "host bits are preserved" to "host bits are zeroed" — a
+semantic change that must be called out in the pathvector changelog. Callers
+that need *rejection* (config, CLI) opt in explicitly via the strict helper;
+wire decode keeps masking via the normal constructor and can drop its
+separate `.map(Nlri::masked)` step.
 
-- strict (config, CLI): `Nlri::new` → `Result`, rejecting host bits
-- tolerant (wire decode): `Nlri::from_wire(octets, len)` → masks once
+### 3.2 routemap — options stay open
 
-### 3.2 routemap
+Today every mutating/query method masks its argument. Candidate adoptions:
 
-Today every mutating/query method masks its argument. Two ways to adopt the
-type:
-
-| Option | Shape | Verdict |
+| Option | Shape | Status |
 |---|---|---|
-| (a) Take `CanonicalPrefix<A>` only; iterators/`longest_match_entry` return it | breaking → routemap 0.2.0 | **Recommended.** Clean; `"10.0.0.0/8".parse().unwrap()` still infers (target type is `CanonicalPrefix`) |
-| (b) Generic `impl Into<CanonicalPrefix<A>>` for source compatibility | additive | **Likely breaks type inference** for the pervasive `table.get("…".parse().unwrap())` pattern in routemap's own doctests and user code (the `parse` target becomes ambiguous). I have not compiled this — a spike should confirm before ruling it out |
+| (a) Take `CanonicalPrefix<A>` only; iterators/`longest_match_entry` return it | breaking → routemap 0.2.0 | **Leading candidate, undecided.** Clean contract |
+| (b) Generic `impl Into<CanonicalPrefix<A>>` for source compatibility | additive | **Inference breakage confirmed on a minimal model** (below); may still be viable with annotations or a different shape |
 | (c) Parallel `*_canonical` methods | additive | Doubles the API surface; only worth it as a transition |
 
-Under (a), routemap's tests that deliberately insert host-bit prefixes to
-prove masking (e.g. `unmasked_insert_equals_masked_insert`,
-`remove_with_unmasked_prefix_finds_entry`) move to
-`IpPrefix::new(..).canonical()` at the call site — the property they test
-becomes "`canonical()` is idempotent and routemap never sees host bits".
+**Compatibility spike (minimal model, not routemap itself).** A scratch crate
+with `Raw`/`Canon` types, `impl From<Raw> for Canon`, and both signatures
+(`fn get_canon(&self, p: Canon)` and `fn get_generic<P: Into<Canon>>(&self, p: P)`):
+
+| Call | Result |
+|---|---|
+| `get_canon("10.0.0.0/8".parse().unwrap())` | compiles — `parse` target inferred as `Canon` |
+| `get_generic("10.0.0.0/8".parse().unwrap())` | **E0283 type annotations needed** — `parse`'s target is ambiguous under an `Into` bound |
+| `get_generic("10.0.0.0/8".parse::<Raw>().unwrap())` | compiles — needs an annotation at every call site |
+
+So (b) is source-compatible for typed arguments but **not** for the bare
+`.parse().unwrap()` pattern. What this does *not* establish: the real
+migration cost. Remaining spike work before choosing:
+
+1. Repeat the check against routemap's actual signatures (generic
+   `A: IpAddress`, `V`), including its doctests.
+2. **Size the migration.** Rough greps (to be tightened, not authoritative):
+   about 245 routemap source/README/docs lines pass `.parse()` into
+   `insert`/`get`/`remove`/`contains`; 4 tests deliberately exercise
+   unmasked input; about 23 non-test `RouteMap` call sites in
+   `pathvector-rib` and `pathvector-rpki`; three pathvector crates depend on
+   routemap (`policy`, `rib`, `rpki`). Under (a) the `.parse()` sites keep
+   compiling (the target infers as `CanonicalPrefix`), so the cost
+   concentrates in tests that rely on masking and in call sites that build
+   `IpPrefix` values explicitly. Under (b) each bare `.parse()` site needs
+   an annotation.
+3. Decide the `FromStr` policy (§6), since it determines whether those
+   `.parse()` sites with host bits keep working under (a).
+4. Measure per §4 so a performance argument, if any, is based on data.
+
+Do not cut routemap 0.2.0 until 1–4 are done.
+
+If (a) is chosen, the routemap tests that deliberately insert host-bit
+prefixes to prove masking (e.g. `unmasked_insert_equals_masked_insert`,
+`remove_with_unmasked_prefix_finds_entry`) move the property to the type:
+"`CanonicalPrefix::new` is idempotent and routemap never sees host bits".
 
 ### 3.3 pathvector-rpki
 
@@ -147,9 +194,12 @@ becomes "`canonical()` is idempotent and routemap never sees host bits".
 `len` from `prefix_len` down to 0 and calls `get` on each. Those prefixes
 **carry host bits** (`prefix` is the query's base address), so routemap's
 masking on `get` is doing real work on every iteration. A canonical type
-alone fixes the typing; combined with the `covering`/`matching` iteration
-discussed in `prefix-length-matching.md` §6, the loop disappears and the
-ancestors are canonical by construction.
+alone fixes the typing. Removing the loop needs **covering enumeration**
+(`PrefixMatchMap::covering`, `prefix-length-matching.md` §4.2/§6.1) — *not*
+a `matching()`-only iterator, which would drop covering VRPs whose
+`maxLength` excludes the route and turn `Invalid` into `NotFound` (RFC 6811
+§2). With a covering iteration the ancestors are canonical by construction
+and the per-length masked `get` calls disappear.
 
 ## 4. Where normalization can actually be removed
 
@@ -161,11 +211,11 @@ plausible-looking redundancy can already be optimized away by the compiler.
 | routemap input paths (`insert/get/remove/contains`) | always masks | no-op when caller already holds canonical | **Removed** for canonical callers (pathvector `Nlri`); it moves to `canonical()` for anyone still starting from `IpPrefix` |
 | routemap output (`iter`, `longest_match_entry`, `treebitmap/mod.rs:218`) | constructs canonical, then `.masked()` | return type becomes `CanonicalPrefix` | **Not removed** — the mask *is* the construction; the type now just records what was already true |
 | wire decode (`update.rs:292,307`) | `Nlri::new` then `masked` | single `Nlri::from_wire` | **Not removed** — wire bytes may legally carry garbage trailing bits, so one mask per decoded NLRI remains. Consolidated, not eliminated |
-| `blackhole.rs:101-108` | parse, compare `masked()`, reject | strict `FromStr` error | **Removed** as code; validation becomes type-level |
+| `blackhole.rs:101-108` | parse, compare `masked()`, reject | `try_new_strict` (or a strict parse) returns `HostBitsSet` | **Moved, not eliminated.** The host-bit check still runs once per configured prefix; only the ad-hoc `n.masked() != n` comparison is replaced by the type's validation helper. Strictness here is a config policy the blackhole loader keeps |
 | `condition.rs:97` | `masked().to_range()` | `IpSet::contains_prefix(prefix)` | Already addressed by `contains_prefix`; canonical type adds only a skipped AND inside `to_range` |
 | `testutil.rs:50` fixture | verifies conditions call `.masked()` | unrepresentable | **Removed** |
 | RIB hash keys (§1.2) | convention | guaranteed | No runtime work removed; removes a failure mode (§1.3) |
-| rpki `validate` loop (§3.3) | up to `prefix_len + 1` masked `get`s | canonical ancestors, ideally one walk | **Removed**, mostly via the `covering` API rather than the type |
+| rpki `validate` loop (§3.3) | up to `prefix_len + 1` masked `get`s | canonical ancestors from a covering enumeration | **Removed**, via the covering API rather than the type; requires covering (not just matching) entries to preserve `Invalid` vs `NotFound` |
 
 **Performance is unmeasured.** Masking a prefix is a handful of integer ops
 (`network_mask` uses one `checked_shl`), against a trie walk of tens of
@@ -181,8 +231,10 @@ Each stage is independently shippable and reviewable:
 1. **ipnetx** (additive; a 0.3.x release): `CanonicalPrefix`, conversions,
    tests (idempotence, strict/lenient, `Ord`, `Hash` agrees with network
    identity).
-2. **routemap** 0.2.0: option (a) from §3.2; benchmark per §4. Add the
-   `covering` iteration here if the length-matching design is pursued.
+2. **routemap**: **decision gate** — complete the §3.2 spike items 1–4
+   first, then choose (a)/(b)/(c). Any breaking release (0.2.0) follows
+   that decision, not the other way round. Add an ancestor-walk/`covering`
+   API here only if `prefix-length-matching.md` option C is pursued.
 3. **pathvector-types / -rib / -session**: `Nlri` over `CanonicalPrefix`;
    `from_wire`; delete `blackhole.rs` host-bit check and the `testutil`
    fixture. Add a `LocRib` regression test for §1.3 *first*, on the current
@@ -195,12 +247,13 @@ Each stage is independently shippable and reviewable:
 - **Two prefix types** in the public surface of `ipnetx`; guidance on which
   to use must be clear in the README.
 - **Naming:** `CanonicalPrefix` vs `Network` vs `NetPrefix`.
-- **Strict vs lenient `FromStr`** (recommended strict) and what that does to
-  user-facing config errors.
+- **`FromStr` policy** — masking vs strict — and its effect on user-facing
+  config errors and on the §3.2 migration cost. Independent of whether the
+  type is canonical-by-construction (it is either way).
 - **Serde** (if ever added): `Deserialize` must validate, not trust.
 - **`IpSetBuilder::add_prefix` / `IpSet::contains_prefix`** take `IpPrefix`;
   accepting `Into<IpPrefix>` would let canonical values flow in without
-  `.as_prefix()` noise, but should be checked for the same inference
-  hazard as §3.2(b).
+  `.as_prefix()` noise, but the §3.2 spike shows the same `.parse()`
+  inference hazard applies.
 - **Verify §1.3** with a reproducing test before it is cited as a bug
   rather than a latent hazard.

@@ -30,19 +30,27 @@ across prefix boundaries**.
 ### 2.1 Entry
 
 An entry is a triple `(P, ge, le)` where `P` is a prefix of length `p`
-(host bits zeroed — see §4.3) and:
+(host bits zeroed — see §4.3). The typed constructor enforces:
 
 ```
 p ≤ ge ≤ le ≤ BITS          (BITS = 32 for IPv4, 128 for IPv6)
 ```
 
-### 2.2 Match
+Whether `ge < p` should be an error is a separate decision — see §2.5.
 
-A route prefix `R` of length `L` matches the entry iff **all** hold:
+### 2.2 Covering and matching (two distinct relations)
 
-1. `L ≥ p` — a route cannot be shorter than the entry it sits inside.
-2. The top `p` bits of `R` equal those of `P` — i.e. `R ⊆ P`.
-3. `ge ≤ L ≤ le`.
+For a route prefix `R` of length `L`:
+
+- **`R` is *covered by* the entry** iff `L ≥ p` and the top `p` bits of `R`
+  equal those of `P` (i.e. `R ⊆ P`). **The length window plays no part.**
+- **`R` *matches* the entry** iff it is covered **and** `ge ≤ L ≤ le`.
+
+Matching implies covering, never the reverse. Boolean prefix-list evaluation
+only needs "matches". RPKI origin validation needs **both** — see §6 — and
+conflating them is the central pitfall for any API in this area: an
+iterator that yields only *matching* entries has already thrown away the
+information RFC 6811 uses to distinguish `Invalid` from `NotFound`.
 
 Host bits of `R` are ignored (`R` is compared as if masked), consistent with
 `IpSet::contains_prefix`.
@@ -73,52 +81,87 @@ Cisco `ip prefix-list … ge/le`; Juniper route-filter match types
 | `0.0.0.0/0 le 32` | matches every IPv4 prefix |
 | `ge == le` | single-length window |
 | `le == BITS` | open-ended on the long side |
-| `ge < p` | **rejected** (`InvalidLengthRange`): no route can satisfy it, so it is a config mistake, not a window to clamp silently |
-| `le < ge`, `le > BITS` | rejected |
+| `le < p` | **rejected** (`EmptyWindow`): a route must have `L ≥ p` to be covered, so `L ≤ le < p` is unsatisfiable — the entry could never match anything |
+| `le < ge`, `le > BITS` | rejected (`EmptyWindow` / `AboveAddrBits`) |
+| `ge < p ≤ le` (e.g. `10.0.0.0/8 ge 4 le 24`) | **not unsatisfiable** — `/16`s inside `10/8` can match. Lengths `4..7` are simply dead because coverage already forces `L ≥ 8`, so the entry behaves as `ge 8 le 24`. Accept-and-clamp vs reject is a policy decision, see §2.5 |
 | `/32` or `/128` exact | matches that host route only |
 | entry has host bits (`10.1.2.3/8`) | see §4.3 |
 | route has host bits (`10.1.2.3/24`) | masked before comparison |
 | v4 entry vs v6 route | unrepresentable — `A` is a type parameter |
 
+### 2.5 `ge < p`: what the rule is actually for
+
+An entry like `10.0.0.0/8 ge 4 le 24` is *satisfiable*; the sub-`p` part of
+the window is just unreachable. So rejecting it is **not** justified by
+"no route can match". The honest reasons to reject it are API-level:
+
+1. **The stored window should say what it means.** If `ge = 4` is accepted
+   and `min_len()` returns 4, callers reading it will believe lengths 4–7
+   are matchable. Either clamp on construction (so `min_len()` returns 8)
+   or reject.
+2. **Round-tripping.** Clamping silently changes what the user wrote; to
+   keep config fidelity the original value would have to be retained
+   alongside the effective one.
+3. **Likely a mistake.** `ge` below the prefix length usually signals a
+   confused config, which an error surfaces earlier than a silent clamp.
+
+None of these is a correctness argument, so this stays an **intentional API
+rule, not a semantic necessity**. Options: (i) reject in the typed
+constructor (recommended default: the stored window always means what it
+says) while a config-layer parser may choose to clamp; (ii) clamp and
+expose both values. Which vendors accept `ge ≤ p` syntax is a **separate
+verification task** (§8.1) and must not be used to justify this rule until
+checked.
+
 ## 3. Preserving prefix boundaries
 
 The rule: **normalization may only be applied where it cannot change the
-match function.**
+answers the type promises to give.** What is promised differs by type, so
+the rule is applied differently:
 
-Allowed (lossless for matching):
+| Type | Mutability | Promises | Normalization allowed |
+|---|---|---|---|
+| `PrefixMatchSet<A>` (boolean) | immutable, built via a builder (mirrors `IpSetBuilder` → `IpSet`) | `matches(R)` only | Entries sharing the same `P` are merged by **unioning length windows** into a length bitset. Lossless for membership |
+| `PrefixMatchMap<A, V>` (payload) | mutable | `covering(R)` / `matching(R)` **with payloads**, and removal | **None.** Every `(entry, V)` pair stays independent (§4.1) |
 
-- Entries with the same `P` are merged by **unioning their length windows**.
-  `(10/8, 16..16)` ∪ `(10/8, 24..24)` ⇒ lengths `{16, 24}` under `10/8`.
-  The result is a *set of lengths*, not necessarily one contiguous window,
-  so storage is a length bitset, not a `(ge, le)` pair.
-
-Not allowed:
+Never allowed in either:
 
 - Merging across different prefixes (sibling /25s → /24). This is the
   `IpSet` behavior we are deliberately *not* reproducing.
-- Dropping an entry because another entry "subsumes" it
-  (`10/8 le 24` subsumes `10.1/16 exact`). Matching is unchanged, but the
-  user's configured entries are lost, which hurts config round-tripping and
-  `show` output. Offer it as an explicit, opt-in `compact()`; never do it in
-  `build()`.
+- Dropping an entry because another "subsumes" it (`10/8 le 24` subsumes
+  `10.1/16 exact`). Matching is unchanged but configured entries are lost,
+  which hurts round-tripping and `show` output. Offer it only as an explicit
+  `compact()`, never in `build()`.
 
-Property to test: for any entry list, `build()` followed by `matches` equals
-a naive linear scan of the original entries.
+Why the map cannot union windows: after `(P, ..20, AS1)` and `(P, ..24, AS1)`
+are unioned into one window, removing the `..24` entry could not restore the
+`..20` entry. The same collapse across different payloads is worse — it
+destroys which ASN authorizes which length. The boolean set avoids the
+problem by having no removal and no payload.
+
+Property to test: for any entry list, the built set's `matches` equals a
+naive linear scan of the original entries.
 
 ## 4. API sketch
 
 ```rust
 // SKETCH — not implemented.
 
-/// One prefix-list entry. Invariant: p <= min_len <= max_len <= A::BITS.
+/// One prefix-list entry. Invariant: p <= min_len <= max_len <= A::BITS
+/// (see §2.5 for the open question on accepting ge < p).
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PrefixMatch<A: IpAddress> {
-    prefix: IpPrefix<A>,   // canonical (host bits zero); see §4.3
+    prefix: IpPrefix<A>,   // host bits zero; see §4.3
     min_len: u8,
     max_len: u8,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum InvalidLengthRange { BelowPrefixLen, MinAboveMax, AboveAddrBits }
+pub enum InvalidLengthRange {
+    BelowPrefixLen, // ge < p — policy rule, §2.5 (omit if clamping is chosen)
+    EmptyWindow,    // le < p, or le < ge: can never match anything
+    AboveAddrBits,  // le > BITS
+}
 
 impl<A: IpAddress> PrefixMatch<A> {
     pub fn exact(prefix: IpPrefix<A>) -> Self;
@@ -131,101 +174,220 @@ impl<A: IpAddress> PrefixMatch<A> {
     pub fn min_len(&self) -> u8;
     pub fn max_len(&self) -> u8;
 
-    /// The §2.2 predicate.
+    /// §2.2: covered AND window contains route.mask().
     pub fn matches(&self, route: IpPrefix<A>) -> bool;
-}
-
-/// Unordered collection of entries with a payload.
-/// `PrefixMatchSet<A>` would be `PrefixMatchMap<A, ()>`.
-pub struct PrefixMatchMap<A: IpAddress, V> { /* see §5 */ }
-
-impl<A: IpAddress, V> PrefixMatchMap<A, V> {
-    pub fn insert(&mut self, entry: PrefixMatch<A>, value: V);
-    pub fn matches(&self, route: IpPrefix<A>) -> bool;
-    /// Every entry matching `route`, with its payload. Needed by RPKI (§6).
-    pub fn matching(&self, route: IpPrefix<A>) -> impl Iterator<Item = (&PrefixMatch<A>, &V)>;
-    pub fn len(&self) -> usize;
+    /// §2.2: covered only; ignores the window.
+    pub fn covers(&self, route: IpPrefix<A>) -> bool;
 }
 ```
 
-Optional: `FromStr` for the textual form `10.0.0.0/8 ge 16 le 24`.
+### 4.1 Boolean set: immutable, window-union
+
+```rust
+pub struct PrefixMatchSetBuilder<A: IpAddress> { /* entries */ }
+impl<A: IpAddress> PrefixMatchSetBuilder<A> {
+    pub fn add(&mut self, entry: PrefixMatch<A>);
+    pub fn build(self) -> PrefixMatchSet<A>;   // unions windows per prefix (§3)
+}
+pub struct PrefixMatchSet<A: IpAddress> { /* prefix -> LenSet */ }
+impl<A: IpAddress> PrefixMatchSet<A> {
+    pub fn matches(&self, route: IpPrefix<A>) -> bool;
+}
+```
+
+Mirrors `IpSetBuilder` → `IpSet`. No removal, no payload, so the union is
+safe.
+
+### 4.2 Payload map: mutable, entries never merged
+
+**Entry identity.** The map holds a *set of `(PrefixMatch, V)` pairs*, with
+`V: Eq`. Two pairs are the same pair iff both the entry (prefix **and**
+window) and the payload are equal.
+
+```rust
+pub struct PrefixMatchMap<A: IpAddress, V> { /* see §5 */ }
+
+impl<A: IpAddress, V: Eq> PrefixMatchMap<A, V> {
+    /// Idempotent. Returns true if the pair was newly inserted.
+    /// Re-inserting an identical pair is a no-op (RTR Serial Query replay,
+    /// today deduplicated by hand in pathvector-rpki `FamilyTable::insert`).
+    pub fn insert(&mut self, entry: PrefixMatch<A>, value: V) -> bool;
+
+    /// Removes exactly that pair. Returns true if it was present.
+    /// Never disturbs other pairs sharing the prefix, the window, or the payload.
+    pub fn remove(&mut self, entry: &PrefixMatch<A>, value: &V) -> bool;
+
+    pub fn len(&self) -> usize;   // number of pairs
+
+    /// Every entry that COVERS `route` (§2.2), regardless of its window,
+    /// with a precomputed `matches` flag. Needed for RPKI (§6.1).
+    pub fn covering(&self, route: IpPrefix<A>) -> impl Iterator<Item = Covering<'_, A, V>>;
+
+    /// Convenience: `covering` filtered to entries whose window matches.
+    pub fn matching(&self, route: IpPrefix<A>) -> impl Iterator<Item = (&PrefixMatch<A>, &V)>;
+
+    pub fn matches(&self, route: IpPrefix<A>) -> bool;   // any(matching)
+}
+
+pub struct Covering<'a, A: IpAddress, V> { /* entry, value, matches: bool */ }
+```
+
+Consequences, each of which is a test:
+
+| Scenario | Required behavior |
+|---|---|
+| Same prefix, **different ASNs** (`(P,..16,AS1)`, `(P,..16,AS2)`) | two pairs; each independently queryable and removable |
+| Same prefix, same ASN, **different windows** (`(P,..20,AS1)`, `(P,..24,AS1)`) | two pairs; removing the `..24` pair leaves `..20` still matching `/20` and no longer matching `/24` |
+| Same prefix, same window, **different payloads** | two pairs; `covering` yields both |
+| Identical pair inserted twice | `len()` unchanged; second `insert` returns `false` |
+| Remove a pair that is absent | returns `false`; nothing else changes |
+| Iteration order | unspecified, **or** pin it (ascending prefix length, then insertion order) if a consumer needs determinism — decide before implementation |
 
 ### 4.3 Host bits on the entry side
 
-Two choices: mask silently, or reject. Recommendation: **take a canonical
-prefix** (see `canonical-prefix.md`) so the question is answered at the
-type boundary, and until that exists, have the constructors mask (matching
-`IpPrefix::to_range` and `routemap`) and document it. Rejecting is better
-for config validation (pathvector's `BlackholeScope` already rejects host
-bits, `blackhole.rs:101-108`) — that is a caller policy, not a matcher one.
+Two independent questions, which should not be conflated:
+
+- **Normalization** (mask on the way in) is enough to guarantee the stored
+  prefix is canonical. A masking constructor therefore satisfies the
+  invariant by itself.
+- **Validation** (reject input that had host bits) is a *caller policy*:
+  config loaders usually want it (pathvector's `BlackholeScope` rejects host
+  bits at `blackhole.rs:101-108`), wire decoders do not.
+
+Recommendation: `PrefixMatch` constructors take a prefix and mask it (matching
+`IpPrefix::to_range` and `routemap`); once `CanonicalPrefix` exists they take
+that instead. Strictness stays with the caller. See `canonical-prefix.md` §2.
 
 ## 5. Data-structure options
 
 Let `n` = entries, `G` = distinct entry prefix lengths present (real lists:
-typically ≤ ~10; worst case 33 / 129), `L` = route length.
+typically ≤ ~10; worst case 33 / 129), `L` = route length. The structure
+must support **covering enumeration with payloads** (§4.2), not just
+boolean `matches`.
 
-| Option | Structure | Query | Notes |
-|---|---|---|---|
-| A. Linear | `Vec<(PrefixMatch, V)>` | O(n) | Trivial; keep as the **test oracle** and for small/ordered lists |
-| B. Tuple-space | per-`p` group: sorted `Vec<(net_bits, LenSet, V)>`; query masks `R` to each `p ≤ L` and binary-searches | O(G · log n) | No trie, no dependency, self-contained in ipnetx. Good fit for large unordered lists (e.g. IRR-generated, tens of thousands of entries) |
-| C. Trie with inherited length sets | `routemap` node value = `LenSet`; each node's *effective* set = own ∪ ancestors' | O(depth) | Needs a "deepest stored prefix covering this **prefix**" lookup in routemap, which does not exist today (`longest_match` is per-address). Natural once routemap grows a `covering` API (§6) |
+| Option | Structure | `covering` / `matching` | Boolean `matches` | Notes |
+|---|---|---|---|---|
+| A. Linear | `Vec<(PrefixMatch, V)>` | O(n) | O(n) | Trivial; the **test oracle**; fine for small/ordered lists |
+| B. Tuple-space | per-`p` group: sorted `Vec<(net_bits, [(window, V)…])>`; query masks `R` to each `p ≤ L` and binary-searches | O(G · log n + k) for k results | O(G · log n) | No trie, no dependency. Coverage falls out of the construction (every probed group has `p ≤ L` and matching network bits ⇒ covered). Entries stay independent, so removal is local |
+| C. Trie (routemap) | node value = list of `(window, V)` pairs; covering = **all ancestors** of `R` with `p ≤ L` | O(depth + k) | O(depth) | Needs a "walk ancestors of this **prefix**" API in routemap, which does not exist today (`longest_match` is per-address). The *inherited length-set* shortcut (effective set = own ∪ ancestors') accelerates **boolean** `matches` only; it **cannot** enumerate per-payload coverage and must not be used for the map |
 
-`LenSet` needs 129 bits for IPv6 (lengths 0..=128): e.g. `[u64; 3]`. For IPv4
-a `u64` suffices.
+`LenSet` (boolean set only) needs 129 bits for IPv6: e.g. `[u64; 3]`; IPv4
+fits a `u64`.
 
 **Recommendation:** ship A (oracle) + B in ipnetx; revisit C when routemap
-has `covering`, gated by a benchmark. Benchmarks must use separated entries
-and assert stored counts (the lesson of the `make_set` bug fixed in the
-`contains_prefix` PR), at 100 / 1k / 10k plus a 50k "IRR-shaped" list with
-`le 24`.
+has an ancestor-walk API, gated by a benchmark. Benchmarks must use separated
+entries and assert stored counts (the lesson of the `make_set` bug fixed in
+the `contains_prefix` PR), at 100 / 1k / 10k plus a 50k "IRR-shaped" list
+with `le 24`.
 
 ## 6. Relationship to the rest of the stack
 
 - **Ordered permit/deny prefix lists** (sequence numbers, first match wins)
   stay in `pathvector-policy`. `PrefixMatch::matches` is the per-entry
-  primitive they iterate. `PrefixMatchMap` is for *large unordered* sets
+  primitive they iterate. `PrefixMatchSet` is for *large unordered* lists
   where order is irrelevant.
-- **RPKI route origin validation** is the same predicate:
-  a ROA `(P, maxLength, ASN)` is `(P, ge = p, le = maxLength)` and RFC 6811
-  needs **every** covering entry (a less-specific ROA can validate where the
-  most-specific one does not), not a boolean. Today
-  `pathvector-rpki/src/table.rs:99-139` does an `longest_match_entry`
-  short-circuit then up to `prefix_len + 1` exact `get()` calls, each
-  building a host-bit-carrying `IpPrefix::new(prefix, len)`. A
-  `matching()` iterator (option B or C) replaces that loop. This is why the
-  map carries a payload `V` from the start.
 - **`IpSet`** remains the tool for address-space algebra. A lossy
-  `PrefixMatchMap::covered_space() -> IpSet<A>` is possible but must be named
-  to make the loss obvious; it is not part of the first cut.
+  `covered_space() -> IpSet<A>` is possible but must be named to make the
+  loss obvious; it is not part of the first cut.
+
+### 6.1 RPKI route origin validation (RFC 6811 §2)
+
+RFC 6811 §2 defines the states in terms of two relations that map onto §2.2:
+
+| RFC 6811 term | Definition (verify wording against the RFC when writing tests) | Here |
+|---|---|---|
+| VRP **covers** route | VRP prefix length ≤ route prefix length **and** the VRP prefix bits match | `covers` / `covering` |
+| VRP **matches** route | covers **and** route length ≤ maxLength **and** origin AS equals the VRP ASN | `matches` + payload check |
+| `NotFound` | **no** VRP covers the route | `covering` is empty |
+| `Valid` | at least one VRP matches | some covering entry has `matches` and the right ASN |
+| `Invalid` | at least one VRP covers, **none** match | `covering` non-empty, no match |
+
+The distinction that matters: a route **longer than every covering VRP's
+maxLength is `Invalid`, not `NotFound`**. Those VRPs cover the route but
+their windows exclude it, so a `matching()`-only iterator drops exactly the
+entries that make the answer `Invalid` and would report `NotFound`.
+Therefore:
+
+- `matching()` alone **cannot** replace the loop in
+  `pathvector-rpki/src/table.rs:99-139`.
+- `covering()` with the `matches` flag can: the existing loop's
+  `saw_covering` is `covering().next().is_some()`, and its
+  `prefix_len <= e.max_len && e.asn == origin` test is the `matches` flag
+  plus the payload comparison. The `longest_match_entry` NotFound
+  short-circuit becomes unnecessary (it was only a fast path).
+- The AS0 exclusion stays in `pathvector-rpki`, as it does today; it is a
+  payload rule, not a length rule. An AS0 VRP still **covers**, so it still
+  contributes to `Invalid`.
+
+**Open point:** `PrefixMatch` rejects `le < p` (§2.4), but today
+`table.rs` accepts any `max_len`, so a malformed VRP with `maxLength < p`
+is currently *covering and never matching*. `pathvector-rpki` must either
+reject such VRPs at ingress (confirm against the RTR protocol text, RFC
+8210, before relying on that) or the API needs a way to represent a
+covering-only entry. Decide before migrating; do not let it change
+validation results silently.
 
 ## 7. Test plan
 
-1. Proptest: `PrefixMatchMap::matches` ≡ linear scan over inserted entries
-   (random entries, random routes, both families, lengths including 0 and
-   BITS).
-2. Table-driven edge cases from §2.4.
-3. Vendor-convention conformance cases (after §8 verification).
-4. Property: inserting entries in any order yields the same match function.
-5. Extend `fuzz/` with a target for construct-then-match (no panics; invalid
-   ranges rejected, never clamped).
-6. Benchmarks per §5.
+1. **Oracle proptests.** `PrefixMatchSet::matches` and
+   `PrefixMatchMap::{covering, matching, matches}` ≡ linear scan over the
+   inserted entries (random entries and routes, both families, lengths
+   including 0 and BITS).
+2. **Table-driven edge cases** from §2.4, including `ge < p ≤ le`
+   (behaves as `ge = p` if accepted; rejected if the §2.5 rule is chosen).
+3. **Payload and removal** — every row of the §4.2 consequences table.
+4. **RFC 6811 §2 distinction** (these are the migration-critical cases).
+   Using VRPs written `(prefix, maxLength, ASN)`:
+
+   | VRPs | Route (origin) | Expected |
+   |---|---|---|
+   | `(10.0.0.0/16, 16, AS1)` | `10.0.0.0/24` (AS1) | **Invalid** — covered, longer than maxLength; *not* `NotFound` |
+   | same | `10.0.0.0/16` (AS1) | Valid |
+   | same | `10.0.0.0/16` (AS2) | Invalid |
+   | same | `11.0.0.0/16` | NotFound |
+   | same | `10.0.0.0/8` (AS1) | NotFound — the VRP is *more specific* than the route, so it does not cover |
+   | `(10.0.0.0/8, 24, AS1)`, `(10.1.0.0/16, 16, AS2)` | `10.1.0.0/24` (AS1) | **Valid** via the *less-specific* VRP although the most-specific covering VRP does not match |
+   | `(10.0.0.0/16, 16, AS1)`, `(10.0.0.0/16, 24, AS2)` | `10.0.0.0/24` (AS2) | Valid; (AS1) → Invalid |
+   | previous, after removing the AS2 VRP | `10.0.0.0/24` (AS2) | **Invalid** (still covered by AS1's VRP), not NotFound |
+   | previous, after removing both | `10.0.0.0/24` | NotFound |
+   | `(10.0.0.0/16, 16, AS0)` | `10.0.0.0/16` (any origin) | Invalid — AS0 covers but never matches |
+   | any | route with host bits (`10.0.0.7/24`) | same as the masked route |
+
+5. **Differential test for the migration.** Proptest comparing the new
+   covering-based `validate` against the current `table.rs` loop on random
+   VRP sets (including duplicates, shared prefixes and `maxLength` edge
+   values) and random routes. They must agree on every input before the old
+   loop is deleted.
+6. **Vendor-convention conformance** — only after §8.1 verification.
+7. **Fuzz target** in `fuzz/` for construct-then-query (no panics; invalid
+   windows rejected per the chosen §2.5 rule).
+8. **Benchmarks** per §5.
 
 ## 8. Open questions
 
-1. **Vendor semantics** — confirm `ge`/`le`, Juniper modifiers, GoBGP
-   `masklength-range` and RFC 6811 behavior from primary docs before
-   freezing §2.3; I wrote the table from memory of those conventions.
-2. **Map vs set first** — `PrefixMatchMap<A, V>` with `()` as the set case
-   (recommended, because RPKI needs payloads) or a set now and a map later.
-3. **Where it lives** — ipnetx (recommended: pure data, no trie needed for
-   option B) vs `routemap` (only needed for option C).
-4. **Strictness** — reject `ge < p` (recommended) vs clamp.
-5. **Textual form** — whether `FromStr` for `P ge N le M` is in scope.
+1. **Vendor syntax and semantics (separate verification task).** Confirm,
+   from primary documentation: Cisco `ge`/`le` and whether `ge` ≤ prefix
+   length is accepted or rejected; Juniper route-filter match types
+   (`exact`, `orlonger`, `longer`, `upto`, `prefix-length-range`); GoBGP
+   `masklength-range`; RFC 6811 §2 wording. §2.3 was written from memory
+   of these conventions and is **unverified**; §2.5 deliberately does not
+   lean on vendor behavior.
+2. **`ge < p`:** reject vs clamp-and-expose-both (§2.5).
+3. **Set vs map first.** The set (§4.1) and map (§4.2) now have different
+   semantics (union vs independent pairs) and are different types. RPKI needs
+   the map; policy lists need the set. Sequence them by consumer.
+4. **Iteration order** of `covering`/`matching` (§4.2).
+5. **Malformed `maxLength < p` VRPs** (§6.1).
+6. **Where it lives** — ipnetx (recommended: pure data; option B needs no
+   trie) vs `routemap` (option C only).
+7. **Textual form** — whether `FromStr` for `P ge N le M` is in scope.
 
 ## 9. Staging
 
-1. `PrefixMatch` + `InvalidLengthRange` + tests (additive, semver-compatible
-   with 0.3.x).
-2. `PrefixMatchMap` option A, then B behind the same API; benchmarks.
-3. `pathvector-policy` adopts for large lists; `pathvector-rpki` adopts
-   `matching()`.
+1. `PrefixMatch` (+ `covers`/`matches`) and `InvalidLengthRange`, with tests
+   (additive, semver-compatible with 0.3.x).
+2. `PrefixMatchSetBuilder`/`PrefixMatchSet` (option A oracle + B).
+3. `PrefixMatchMap` (option A oracle + B) with `covering`; RFC 6811 test
+   table and the differential test against `table.rs`.
+4. `pathvector-rpki` migrates behind the differential test;
+   `pathvector-policy` adopts the set for large lists.
