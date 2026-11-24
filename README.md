@@ -382,6 +382,45 @@ assert!(!prefix.contains(Ipv6Addr::new(0x2001, 0x0db9, 0, 0, 0, 0, 0, 0)));
 
 ---
 
+## PrefixMatch — a prefix with a length window
+
+`IpSet` answers *address-coverage* questions, and it merges touching ranges to
+do so: a set holding `10.0.0.0/25` and `10.0.0.128/25` "covers" `10.0.0.0/24`.
+Routing policy often asks a different question — *is this route inside that
+prefix, and is its length acceptable?* — where the two /25s must **not**
+combine into a /24. `PrefixMatch` is that primitive: one prefix plus an
+inclusive window of route-prefix lengths.
+
+```rust
+use std::net::Ipv4Addr;
+use ipnetx::{prefix::IpPrefix, prefix_match::PrefixMatch};
+
+let ten = IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap();
+// Anything inside 10.0.0.0/8 whose length is between /16 and /24.
+let entry = PrefixMatch::new(ten, 16, 24).unwrap();
+
+let route = |b, len| IpPrefix::new(Ipv4Addr::new(10, b, 0, 0), len).unwrap();
+assert!(entry.matches(route(1, 16)));
+assert!(entry.matches(route(1, 24)));
+assert!(!entry.matches(route(1, 25)));  // longer than the window
+assert!(entry.covers(route(1, 25)));    // …but still inside 10.0.0.0/8
+```
+
+* **`covers`** — the route is inside the entry's prefix; the window is ignored.
+* **`matches`** — covers *and* the route's length is within `min_len..=max_len`.
+
+The bounds are plain numbers. `ipnetx` makes **no claim of compatibility with
+any vendor's prefix-list syntax**; translating `ge`/`le`-style configuration
+into numeric bounds is the caller's job. `matches` is also **not** RFC 6811's
+"Matched" for RPKI origin validation, which additionally compares origin ASNs.
+
+`min_len` may not be shorter than the entry's own prefix length (such an entry
+could only ever behave like `min_len = prefix length`), and `max_len` may not
+exceed the address width; invalid combinations return an
+[`InvalidLengthRange`](prefix_match::InvalidLengthRange).
+
+---
+
 ## IpSet — working with sets of addresses
 
 `IpSet` is for when you have an arbitrary collection of ranges and prefixes and
