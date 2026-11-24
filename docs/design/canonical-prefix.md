@@ -43,22 +43,29 @@ convention is enforced in some places and merely assumed in others.
 (`nlri.rs`, constructor docs), and `Nlri::from_prefix` wraps any `IpPrefix`
 unchanged.
 
-### 1.3 A latent inconsistency this allows (by code reading — not reproduced)
+### 1.3 A reproduced inconsistency in `LocRib` (pathvector #71)
 
 `LocRib::insert` (`loc_rib.rs:247-258`) stores `candidates` and `peer_index`
 under the **raw** `route.nlri`, but reads/writes `best` through `RouteMap`,
 which **masks**. `best_routes()` and `longest_match()`
 (`loc_rib.rs:348-364`) then take the *masked* prefix coming back out of
 `RouteMap`, wrap it with `Nlri::from_prefix`, and look it up in
-`candidates`. If a route with host bits ever reached `LocRib::insert`, the
-`candidates.get` would miss and the route would silently vanish from
-`best_routes()` and forwarding lookups.
+`candidates`, which misses.
 
-Wire decode masks, so this is not reachable from a peer today. It is
-reachable from any other path that builds an `Nlri` with host bits (the
-public constructor, tests, a future API/static-route injector). The point is
-that correctness currently depends on a convention the type system does not
-express.
+**Reproduced** (public API, pathvector commit `4b5cf3a6`, no production
+code changed — see
+[pathvector #71](https://github.com/dbrucknr/pathvector/issues/71#issuecomment-7145528693)):
+inserting a route for `192.0.2.129/24` leaves `len=1`, `best(raw)=true`,
+but `best_routes()` yields `0` routes and `longest_match(192.0.2.1)` is
+`None`.
+
+Scope, as stated in the issue: this is a **public-library defect**, not a
+demonstrated peer-triggerable bug — the session's IPv4/IPv6 NLRI decoders
+mask their input — and it predates the canonical-prefix discussion. The
+issue's position is that it **should be fixed independently of** a
+`CanonicalPrefix` type; this design does not depend on that fix and the fix
+does not depend on this design. The type would make the *class* of bug
+unrepresentable; it is not the remedy for #71.
 
 ## 2. Proposed type
 
@@ -194,12 +201,13 @@ prefixes to prove masking (e.g. `unmasked_insert_equals_masked_insert`,
 `len` from `prefix_len` down to 0 and calls `get` on each. Those prefixes
 **carry host bits** (`prefix` is the query's base address), so routemap's
 masking on `get` is doing real work on every iteration. A canonical type
-alone fixes the typing. Removing the loop needs **covering enumeration**
-(`PrefixMatchMap::covering`, `prefix-length-matching.md` §4.2/§6.1) — *not*
-a `matching()`-only iterator, which would drop covering VRPs whose
-`maxLength` excludes the route and turn `Invalid` into `NotFound` (RFC 6811
-§2). With a covering iteration the ancestors are canonical by construction
-and the per-length masked `get` calls disappear.
+alone fixes the typing. Removing the loop needs **covering enumeration** —
+the generic `RouteMap::covering` explored in
+`routemap-covering-iterator.md`, with `pathvector-rpki` applying its own
+RFC 6811 predicate to every covering entry. A window-filtered iterator would
+drop covering VRPs whose `maxLength` excludes the route and turn `Invalid`
+into `NotFound` (RFC 6811 §2). With a covering iteration the ancestors are
+canonical by construction and the per-length masked `get` calls disappear.
 
 ## 4. Where normalization can actually be removed
 
@@ -237,9 +245,11 @@ Each stage is independently shippable and reviewable:
    API here only if `prefix-length-matching.md` option C is pursued.
 3. **pathvector-types / -rib / -session**: `Nlri` over `CanonicalPrefix`;
    `from_wire`; delete `blackhole.rs` host-bit check and the `testutil`
-   fixture. Add a `LocRib` regression test for §1.3 *first*, on the current
-   code, to confirm the inconsistency is real before relying on it as
-   motivation.
+   fixture. The `LocRib` inconsistency (§1.3) is already reproduced and
+   tracked as pathvector #71, with acceptance criteria (IPv4/IPv6,
+   non-octet-aligned prefixes, host-bit variants, lookup/withdrawal through
+   canonical and non-canonical forms); it is fixed independently and is not
+   a prerequisite or a justification for this stage.
 4. **pathvector-rpki**: switch `validate` to the covering iteration.
 
 ## 6. Risks and open questions
@@ -255,5 +265,7 @@ Each stage is independently shippable and reviewable:
   accepting `Into<IpPrefix>` would let canonical values flow in without
   `.as_prefix()` noise, but the §3.2 spike shows the same `.parse()`
   inference hazard applies.
-- **Verify §1.3** with a reproducing test before it is cited as a bug
-  rather than a latent hazard.
+- **Scope of ipnetx:** per the current direction, canonical prefixes and
+  the standalone length-window predicate (`PrefixMatch`) both live in ipnetx
+  but are separate decisions with separate PRs; collections of entries stay
+  deferred.
