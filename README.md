@@ -67,7 +67,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ipnetx = "0.2"
+ipnetx = "0.3"
 ```
 
 Or: `cargo add ipnetx`
