@@ -239,8 +239,8 @@ today is correctness-by-construction (§1.3), not speed.
 ## 5. Staging
 
 These are independent proposals, not an approved migration sequence. The
-standalone `PrefixMatch` implementation is the current next step; none of
-the decisions below is required for it:
+standalone `PrefixMatch` implementation is in ipnetx PR #7; none of the
+decisions below is required for it:
 
 1. **ipnetx** (additive; a 0.3.x release): `CanonicalPrefix`, conversions,
    tests (idempotence, strict/lenient, `Ord`, `Hash` agrees with network

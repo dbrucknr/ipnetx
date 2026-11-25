@@ -1,8 +1,7 @@
 # Design: standalone prefix length-window predicate (`PrefixMatch`)
 
-**Status:** proposal. Only `PrefixMatch` (§3) is proposed for implementation;
-everything else here is context, a division of responsibility, or explicitly
-deferred.
+**Status:** §3 is implemented in ipnetx PR #7 (not yet released). Everything
+else here is context, a division of responsibility, or explicitly deferred.
 
 ## 1. Problem
 
@@ -18,55 +17,65 @@ Example (checked against the current code): a list holds `10.0.0.0/25` and
 | `IpSet` — are all addresses of `10.0.0.0/24` covered? | **true** — the two /25s merge into one stored range |
 | Is `10.0.0.0/24` one of the listed prefixes? | **false** |
 
-Routing policy asks the second kind of question, plus length windows
-("anything inside `10/8` between /16 and /24"). That needs a primitive that
-never merges across prefix boundaries.
+Filters and access rules often ask the second kind of question, plus length
+windows ("anything inside `10/8` between /16 and /24"). That needs a primitive
+that never merges across prefix boundaries, and it is useful to any ipnetx
+user, not only to routing software.
 
 ## 2. Scope and division of responsibility
 
 | Layer | Owns | Does **not** own |
 |---|---|---|
-| **ipnetx** | `PrefixMatch`: one prefix plus a numeric length window, with `covers` and `matches` (§3). Later, and separately, a canonical prefix type (`canonical-prefix.md`) | Vendor syntax; RPKI rules; any collection of entries |
+| **ipnetx** | Prefix containment (`IpPrefix::covers`); `PrefixMatch`: one prefix plus a numeric length window, with bounds validation and the `exact`/`or_longer` constructors (§3). Later, and separately, a canonical prefix type (`canonical-prefix.md`) | Vendor syntax; RPKI rules; any collection of entries |
 | **routemap** | *Exploration only (see `routemap-covering-iterator.md`)*: a generic "all stored prefixes that cover this prefix" iterator | What a caller does with those entries |
-| **pathvector-policy** | Vendor syntax (`ge`/`le`, `orlonger`, …), permit/deny and ordering, composing entries into lists; applies `PrefixMatch` to the entries routemap returns | — |
+| **pathvector-policy** | Matching a route against a list of `PrefixMatch` entries and implementing its route `Condition`; permit/deny and ordering; any vendor syntax | What one entry accepts |
 | **pathvector-rpki** | RFC 6811 validation: `maxLength`, origin-ASN comparison, AS0, `NONE`, the three states; applies its **own** predicate to the entries routemap returns | — |
 
 Consequences of this split:
 
 - ipnetx makes **no vendor-compatibility claim**. The first API takes
-  explicit numeric bounds (`min_len`, `max_len`); any `ge`/`le` mapping lives
-  in `pathvector-policy`.
+  explicit numeric bounds (`min_len`, `max_len`); any `ge`/`le` mapping is a
+  consumer's job.
 - ipnetx contains **no RPKI rules**. `PrefixMatch` is never an RFC VRP.
-- Collections (`PrefixMatchSet`, `PrefixMatchMap`) are **deferred** (§7);
-  composing a routemap covering iteration with per-prefix `PrefixMatch`
-  values may make them unnecessary.
+- ipnetx's public API docs describe prefixes and lengths only. Protocol
+  caveats, such as the one in §3.1, belong in the consumer that needs them.
+- Collections (`PrefixMatchSet`, `PrefixMatchMap`) are **deferred** (§7). The
+  first consumer, a length-aware condition in `pathvector-policy`, scans a
+  plain list of entries and needs neither.
 
 ## 3. `PrefixMatch`
 
 ### 3.1 Definitions
 
-An entry is `(P, min_len, max_len)`, `P` a prefix of length `p`. For a route
-prefix `R` of length `L`:
+**Containment on prefixes.** `IpPrefix::covers(&other)` is true when `other`
+is at least as long as `self` and agrees with it on `self`'s leading bits.
+Host bits on both sides are ignored. It is directional, unlike `overlaps`.
 
-- **covers:** `L ≥ p` and the first `p` bits of `R` equal those of `P`
-  (`R ⊆ P`). The window plays no part.
+An entry is `(P, min_len, max_len)`, `P` a prefix of length `p`. For a
+candidate prefix `R` of length `L`:
+
+- **covers:** `P.covers(R)`: `L ≥ p` and the first `p` bits of `R` equal
+  those of `P` (`R ⊆ P`). The window plays no part.
 - **matches:** covers **and** `min_len ≤ L ≤ max_len`.
 
-Matching implies covering, never the reverse. Host bits of `R` are ignored.
+Matching implies covering, but covering does not imply matching. Host bits of
+`R` are ignored.
 
 **Terminology warning.** `PrefixMatch::matches` is a *length-window* match.
 It is **not** RFC 6811's "Matched", which additionally requires the origin
-ASN to equal the VRP's ASN (§5). The API docs must say so, and the RPKI
-consumer must not call `matches` and conclude "matched".
+ASN to equal the VRP's ASN (§5). An RPKI consumer must not call `matches` and
+conclude "matched". The name `matches` is kept; the ipnetx docs state only
+that it tests containment and length, and that any other condition is the
+caller's.
 
 ### 3.2 Constructor rules
 
 ```rust
-// SKETCH — mirrors the proposed implementation.
+// SKETCH — mirrors the implementation.
 pub struct PrefixMatch<A: IpAddress> { prefix: IpPrefix<A>, min_len: u8, max_len: u8 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InvalidLengthRange {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InvalidLengthRange {        // exhaustive, by choice
     MaxAboveAddrBits, // max_len > A::BITS
     MinAboveMax,      // min_len > max_len
     MinBelowPrefixLen // min_len < p
@@ -75,11 +84,12 @@ pub enum InvalidLengthRange {
 impl<A: IpAddress> PrefixMatch<A> {
     pub fn new(prefix: IpPrefix<A>, min_len: u8, max_len: u8) -> Result<Self, InvalidLengthRange>;
     pub fn exact(prefix: IpPrefix<A>) -> Self;          // min_len = max_len = p
+    pub fn or_longer(prefix: IpPrefix<A>) -> Self;      // min_len = p, max_len = A::BITS
     pub fn prefix(&self) -> IpPrefix<A>;                // host bits zeroed
     pub fn min_len(&self) -> u8;
     pub fn max_len(&self) -> u8;
-    pub fn covers(&self, route: IpPrefix<A>) -> bool;
-    pub fn matches(&self, route: IpPrefix<A>) -> bool;
+    pub fn covers(&self, candidate: IpPrefix<A>) -> bool;
+    pub fn matches(&self, candidate: IpPrefix<A>) -> bool;
 }
 ```
 
@@ -100,9 +110,17 @@ Checks run in this order and the first failure is reported:
   **loosening to clamp-and-accept later is non-breaking; tightening later is
   breaking.** `max_len < p` needs no separate check: with `min_len ≥ p` it
   already implies `min_len > max_len`.
-- **No vendor mapping and no `or_longer`/`longer`/`up_to` helpers in the
-  first cut.** Those names encode vendor conventions; callers build them
-  from `new` (e.g. "or-longer" is `new(P, p, BITS)`).
+- **Two named constructors, defined numerically.** `exact` and `or_longer`
+  cover the two windows determined by the prefix alone, so they cannot fail.
+  An earlier revision of this document proposed no `or_longer` because the
+  name echoes vendor syntax. That was revisited once a consumer existed:
+  without it, callers write `new(P, p, BITS)` and unwrap a result that cannot
+  be an error. `or_longer` is defined by that expression alone and claims no
+  equivalence with any vendor's keyword. There are still no `longer` or
+  `up_to` helpers and no syntax mapping.
+- **`InvalidLengthRange` is not `#[non_exhaustive]`.** The three variants are
+  the complete set of ways the bounds can be wrong, and callers may match them
+  exhaustively. Adding a variant would be a breaking change.
 
 ### 3.3 Edge cases (each is a test)
 
@@ -112,6 +130,8 @@ Checks run in this order and the first failure is reported:
 | `0.0.0.0/0`, window `0..=32` | matches every IPv4 prefix |
 | `min_len == max_len` | single-length window |
 | `max_len == BITS` | open-ended on the long side |
+| `or_longer(P)` | equals `new(P, p, BITS)`; matches exactly what it covers |
+| `or_longer` of a `/32` or `/128` | equals `exact` |
 | `min_len < p` | `Err(MinBelowPrefixLen)` (e.g. `/8`, min 4, max 24) |
 | `min_len > max_len` | `Err(MinAboveMax)` |
 | `max_len > BITS` | `Err(MaxAboveAddrBits)` — checked first, so `(min 40, max 33)` on IPv4 is `MaxAboveAddrBits` |
@@ -138,8 +158,11 @@ Expected values must not be computed by the code under test, so:
 5. **Properties** (random prefixes and windows, both families, biased so
    covered routes are common): `matches ⇒ covers`; `covers` is independent
    of the window; widening the window never loses a match; `exact(P).matches(R)`
-   ⇔ `R.masked() == P`; `matches(R) == matches(R.masked())`; entries from
-   host-bit variants are `==` and hash equal.
+   ⇔ `R.masked() == P`; `or_longer(P).matches(R)` ⇔ `covers`;
+   `matches(R) == matches(R.masked())`; entries from host-bit variants are
+   `==` and hash equal. For `IpPrefix::covers`: it agrees with range
+   containment, `overlaps` holds exactly when one side covers the other, and
+   two prefixes cover each other exactly when their masked forms are equal.
 6. **Constructor table:** every error variant, precedence, and the
    accept boundaries (`min = p`, `max = BITS`, `min = max`).
 
@@ -254,7 +277,8 @@ It is deliberately not proposed here.
 
 Cisco `ge`/`le`, Juniper route-filter match types, GoBGP `masklength-range`
 and similar are **not** verified and **no compatibility claim is made**.
-`pathvector-policy` owns that mapping and its verification. When it does,
+Whichever consumer adds such a mapping owns it and its verification. If it
+does,
 the §3.2 `min_len < p` rule is one decision it may want to relax (clamping
 is a non-breaking relaxation for ipnetx).
 
@@ -296,15 +320,17 @@ become the consumer's responsibility there.
 ## 8. Open questions
 
 1. **`min_len < p`:** reject (proposed, relaxable) vs clamp-and-expose-both.
-2. **`matches` naming** given the RFC "Matched" overlap (§3.1) — keep and
-   document, or choose a name that avoids the clash (e.g. `window_matches`).
-3. **Verbatim RTR error handling** (RFC 8210 §12) for pathvector #91.
-4. **Whether collections are ever needed** once the routemap covering
-   iterator exists (§7).
+2. **Verbatim RTR error handling** (RFC 8210 §12) for pathvector #91.
+3. **Whether collections are ever needed** (§7). The first consumer does not
+   need one.
+
+Resolved: the method stays `matches` (§3.1).
 
 ## 9. Staging
 
-1. `PrefixMatch` + `InvalidLengthRange` + tests (additive; this document's
-   implementation scope).
-2. Separately decided: canonical prefix type; routemap covering iterator;
-   consumer adoption in `pathvector-policy` and `pathvector-rpki`.
+1. `IpPrefix::covers`, `PrefixMatch`, `InvalidLengthRange` and tests
+   (additive): ipnetx PR #7.
+2. After an ipnetx release: `pathvector-policy` requires that version. Its
+   length-aware condition has been verified against the PR branch.
+3. Separately decided: canonical prefix type; routemap covering iterator;
+   any use in `pathvector-rpki`, which keeps its own validation checks.
