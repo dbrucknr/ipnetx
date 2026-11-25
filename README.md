@@ -498,10 +498,10 @@ assert!(set.contains_range(inner));  // fully inside 10/8
 assert!(!set.contains_range(outer)); // starts before 10/8 — not contained
 
 // Prefix containment — host bits are ignored; same single-range rule as above
-let route = IpPrefix::new(Ipv4Addr::new(10, 1, 2, 3), 24).unwrap();
+let inside = IpPrefix::new(Ipv4Addr::new(10, 1, 2, 3), 24).unwrap();
 let too_wide = IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 7).unwrap();
 
-assert!(set.contains_prefix(route));      // 10.1.2.0/24 is inside 10/8
+assert!(set.contains_prefix(inside));     // 10.1.2.0/24 is inside 10/8
 assert!(!set.contains_prefix(too_wide));  // 10/7 extends past 10/8
 ```
 
@@ -813,12 +813,13 @@ Cost is linear in the number of stored ranges for both cases. Unaligned data
 costs roughly 4–5× the aligned case — the 14× prefix fan-out is partly offset by
 the fixed per-range overhead (allocation and iteration) that both cases pay.
 
-> Measurements taken on a MacBook Pro M2 Max, `ipnetx v0.3.0`, release profile.
+> Measurements taken on a MacBook Pro M2 Max, release profile, with the `IpSet`
+> code first released in `ipnetx v0.3.1`.
 > Times reflect data that fits comfortably in CPU cache — a realistic scenario
 > for most workloads. At BGP-table scale (~900k routes) the bottleneck shifts
 > to memory bandwidth rather than compute.
 >
-> *Correction:* figures published for v0.2.x showed `union`, `intersection`,
+> *Correction:* figures published up to v0.3.0 showed `union`, `intersection`,
 > `difference` and `complement` as flat across set sizes. Those benchmarks built
 > their input from back-to-back /24 blocks, which `build()` merges into a single
 > stored range, so they were measuring a one-element set. The numbers above come

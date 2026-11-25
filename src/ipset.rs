@@ -346,22 +346,20 @@ impl<A: IpAddress> IpSet<A> {
         }
     }
 
-    /// Returns `true` if every address covered by `prefix` is a member of this set.
+    /// Returns `true` if every address in `prefix` is a member of this set.
     ///
     /// Host bits in `prefix` are ignored, so `10.1.2.3/16` is queried as
     /// `10.1.0.0/16`. Like [`contains_range`](IpSet::contains_range), the whole
     /// prefix must be enclosed within a *single* stored range: a prefix that
     /// spans a gap between two stored ranges returns `false`.
     ///
-    /// This is the natural query for route-policy prefix lists, where a
-    /// route's NLRI must be fully covered by the configured set.
+    /// This asks about addresses, not about which prefixes were added. Adjacent
+    /// ranges are merged when the set is built, so a set made from two adjacent
+    /// `/25`s does contain their `/24`.
     ///
     /// Uses binary search — O(log n) in the number of stored ranges.
     ///
-    /// This is an API-clarity improvement, not an optimization: it is exactly
-    /// `contains_range(prefix.to_range())`, and benchmarks show the two forms
-    /// perform identically (the host-bit masking that callers used to spell
-    /// out as `prefix.masked().to_range()` was already redundant).
+    /// Equivalent to `contains_range(prefix.to_range())`, with the same cost.
     ///
     /// # Examples
     ///
@@ -1815,7 +1813,7 @@ mod tests {
     // cargo test ipset::tests::test_contains_prefix_matches_masked_range_form
     #[test]
     fn test_contains_prefix_matches_masked_range_form() {
-        // Guards the equivalence pathvector relied on before this API existed:
+        // Host bits must not matter:
         // contains_prefix(p) == contains_range(p.masked().to_range()).
         let mut builder = IpSetBuilder::<Ipv4Addr>::new();
         builder.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap());

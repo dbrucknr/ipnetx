@@ -141,7 +141,7 @@ fn bench_contains_ip(c: &mut Criterion) {
     group.finish();
 }
 
-/// Whole-range and whole-prefix membership — the route-policy hot path.
+/// Whole-range and whole-prefix membership.
 ///
 /// `contains_range` and `contains_prefix` should cost the same; both are
 /// included so any divergence is visible. Cases per size:
@@ -170,7 +170,7 @@ fn bench_contains_prefix(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("v4_span", size), &size, |b, _| {
             b.iter(|| set.contains_prefix(black_box(span)));
         });
-        // The pre-contains_prefix spelling used by pathvector-policy, kept as a baseline.
+        // The equivalent range-form spelling, kept as a baseline.
         group.bench_with_input(BenchmarkId::new("v4_hit_range_form", size), &size, |b, _| {
             b.iter(|| set.contains_range(black_box(hit).masked().to_range()));
         });
