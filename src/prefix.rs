@@ -173,6 +173,37 @@ impl<A: IpAddress> IpPrefix<A> {
         self.to_range().overlaps(&other.to_range())
     }
 
+    /// Returns `true` if `other` lies entirely inside this prefix.
+    ///
+    /// That is, `other` is at least as long as this prefix and agrees with it
+    /// on this prefix's leading bits. A prefix covers itself. Host bits on
+    /// both sides are ignored, so two prefixes cover each other exactly when
+    /// their [`masked`](Self::masked) forms are equal — which is not the same
+    /// as `==`, since that compares host bits too.
+    ///
+    /// Unlike [`overlaps`](Self::overlaps), the relation has a direction: a
+    /// `/8` covers a `/24` inside it, but not the reverse. Unlike an
+    /// [`IpSet`](crate::ipset::IpSet), this is a question about one prefix, so
+    /// two adjacent `/25`s do not combine to cover their `/24`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::net::Ipv4Addr;
+    /// use ipnetx::prefix::IpPrefix;
+    ///
+    /// let wide = IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap();
+    /// let narrow = IpPrefix::new(Ipv4Addr::new(10, 1, 2, 0), 24).unwrap();
+    /// assert!(wide.covers(&narrow));
+    /// assert!(!narrow.covers(&wide));
+    /// ```
+    #[must_use]
+    pub fn covers(&self, other: &IpPrefix<A>) -> bool {
+        // The length check is what gives the relation its direction: `contains`
+        // alone would let `10.0.0.0/16` "cover" `10.0.0.0/8`.
+        other.mask >= self.mask && self.contains(other.ip)
+    }
+
     // ── helpers ────────────────────────────────────────────────────────────
 
     /// Bit mask covering the network portion (top `mask` bits within the
@@ -765,5 +796,55 @@ mod tests {
         // IPv4 notation is not valid for IpPrefix<Ipv6Addr>
         let err = "192.168.1.0/24".parse::<IpPrefix<Ipv6Addr>>().unwrap_err();
         assert_eq!(err, ParsePrefixError::InvalidAddress);
+    }
+
+    // --- Covers ---
+    //
+    // Expected values are worked out by hand: `a` covers `b` when `b` is at
+    // least as long as `a` and shares `a`'s leading bits.
+
+    #[test]
+    fn test_v4_covers_direction() {
+        let p = |s: &str| s.parse::<IpPrefix<Ipv4Addr>>().unwrap();
+        assert!(p("10.0.0.0/8").covers(&p("10.0.0.0/8")));
+        assert!(p("10.0.0.0/8").covers(&p("10.1.2.0/24")));
+        assert!(!p("10.1.2.0/24").covers(&p("10.0.0.0/8")));
+        // Same network address, shorter length: not covered.
+        assert!(!p("10.0.0.0/16").covers(&p("10.0.0.0/8")));
+        assert!(!p("10.0.0.0/8").covers(&p("11.0.0.0/16")));
+    }
+
+    #[test]
+    fn test_v4_covers_boundaries() {
+        let p = |s: &str| s.parse::<IpPrefix<Ipv4Addr>>().unwrap();
+        // 172.16.0.0/12 spans 172.16.0.0 through 172.31.255.255.
+        assert!(p("172.16.0.0/12").covers(&p("172.31.255.0/24")));
+        assert!(!p("172.16.0.0/12").covers(&p("172.32.0.0/24")));
+        assert!(!p("172.16.0.0/12").covers(&p("172.15.255.0/24")));
+        assert!(p("0.0.0.0/0").covers(&p("255.255.255.255/32")));
+        assert!(p("0.0.0.0/0").covers(&p("0.0.0.0/0")));
+        assert!(!p("255.255.255.255/32").covers(&p("0.0.0.0/0")));
+        assert!(p("192.0.2.1/32").covers(&p("192.0.2.1/32")));
+        assert!(!p("192.0.2.1/32").covers(&p("192.0.2.2/32")));
+    }
+
+    #[test]
+    fn test_v4_covers_unmasked_ip() {
+        let p = |s: &str| s.parse::<IpPrefix<Ipv4Addr>>().unwrap();
+        assert!(p("10.9.9.9/8").covers(&p("10.1.2.3/24")));
+        assert!(p("192.168.1.200/24").covers(&p("192.168.1.0/24")));
+    }
+
+    #[test]
+    fn test_v6_covers() {
+        let p = |s: &str| s.parse::<IpPrefix<Ipv6Addr>>().unwrap();
+        assert!(p("2001:db8::/32").covers(&p("2001:db8:1::/48")));
+        assert!(!p("2001:db8:1::/48").covers(&p("2001:db8::/32")));
+        assert!(!p("2001:db8::/32").covers(&p("2001:db9::/48")));
+        // The 65th bit is zero in this /65.
+        assert!(p("2001:db8::/65").covers(&p("2001:db8::7fff:0:0:0/80")));
+        assert!(!p("2001:db8::/65").covers(&p("2001:db8::8000:0:0:0/80")));
+        assert!(p("::/0").covers(&p("2001:db8::1/128")));
+        assert!(!p("2001:db8::1/128").covers(&p("2001:db8::2/128")));
     }
 }

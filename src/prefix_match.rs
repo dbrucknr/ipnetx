@@ -1,8 +1,11 @@
-//! A prefix paired with a prefix-length window.
+//! A prefix paired with a window of acceptable prefix lengths.
 //!
-//! [`PrefixMatch`] answers the question routing policy asks of a configured
-//! entry: *is this route prefix inside my prefix, and is its length within my
-//! window?* It is deliberately **not** address-space algebra — see
+//! [`PrefixMatch`] answers one question about a candidate prefix: *is it inside
+//! this prefix, and is its length within this window?* That is the shape of a
+//! rule such as "any block inside `10.0.0.0/8` that is a `/16` through a `/24`"
+//! in an access list, a filter, or an address-plan check.
+//!
+//! It is deliberately **not** address-space algebra — see
 //! [`IpSet`](crate::ipset::IpSet) for that. The difference matters: an
 //! `IpSet` holding `10.0.0.0/25` and `10.0.0.128/25` merges them into one
 //! range and therefore "covers" `10.0.0.0/24`, whereas no `PrefixMatch` for
@@ -10,30 +13,25 @@
 //!
 //! # Bounds are explicit numbers
 //!
-//! The window is given as plain `min_len` / `max_len` prefix lengths. This
-//! module makes **no claim of compatibility with any vendor's prefix-list
-//! syntax** (`ge`/`le`, `orlonger`, `masklength-range`, …); mapping such
-//! syntax onto numeric bounds is the caller's job.
+//! The window is given as plain `min_len` / `max_len` prefix lengths.
+//! [`exact`](PrefixMatch::exact) and [`or_longer`](PrefixMatch::or_longer)
+//! are shorthands for two common windows, defined only in those numeric terms.
+//! If you are translating from a configuration syntax, map it onto these
+//! numbers; this module assigns no other meaning to them.
 //!
 //! # Covers vs matches
 //!
-//! For a route prefix `R` of length `L` and an entry `(P, min_len, max_len)`
+//! For a candidate prefix `C` of length `L` and an entry `(P, min_len, max_len)`
 //! where `P` has length `p`:
 //!
-//! * [`covers`](PrefixMatch::covers): `L ≥ p` and the first `p` bits of `R`
-//!   equal those of `P` — i.e. `R` lies inside `P`. The window is ignored.
+//! * [`covers`](PrefixMatch::covers): `L ≥ p` and the first `p` bits of `C`
+//!   equal those of `P` — i.e. `C` lies inside `P`. The window is ignored.
 //! * [`matches`](PrefixMatch::matches): `covers` **and**
 //!   `min_len ≤ L ≤ max_len`.
 //!
-//! Matching implies covering, never the reverse. Host bits of `R` are
-//! ignored.
-//!
-//! `matches` is a *length-window* match only. It is **not** RFC 6811's
-//! "Matched" for RPKI origin validation, which additionally requires the
-//! route's origin ASN to equal the VRP's ASN. Code doing origin validation
-//! must apply its own origin checks; `covers` corresponds to RFC 6811's
-//! "covers" relation, and `max_len` can carry a VRP's `maxLength`, but
-//! nothing here decides `Valid`, `Invalid` or `NotFound`.
+//! Matching implies covering, but covering does not imply matching. Host bits
+//! of `C` are ignored. `matches` tests containment and length only; any other
+//! condition attached to a prefix is the caller's to check.
 //!
 //! # Examples
 //!
@@ -45,11 +43,11 @@
 //! // Anything inside 10.0.0.0/8 whose length is between /16 and /24.
 //! let entry = PrefixMatch::new(ten, 16, 24).unwrap();
 //!
-//! let route = |a, b, len| IpPrefix::new(Ipv4Addr::new(10, a, b, 0), len).unwrap();
-//! assert!(entry.matches(route(1, 0, 16)));
-//! assert!(entry.matches(route(1, 2, 24)));
-//! assert!(!entry.matches(route(1, 2, 25)));   // longer than the window
-//! assert!(entry.covers(route(1, 2, 25)));     // …but still inside 10/8
+//! let block = |a, b, len| IpPrefix::new(Ipv4Addr::new(10, a, b, 0), len).unwrap();
+//! assert!(entry.matches(block(1, 0, 16)));
+//! assert!(entry.matches(block(1, 2, 24)));
+//! assert!(!entry.matches(block(1, 2, 25)));   // longer than the window
+//! assert!(entry.covers(block(1, 2, 25)));     // …but still inside 10/8
 //!
 //! let outside = IpPrefix::new(Ipv4Addr::new(11, 0, 0, 0), 16).unwrap();
 //! assert!(!entry.covers(outside));
@@ -74,7 +72,7 @@ pub enum InvalidLengthRange {
     ///
     /// This is an API rule, not a semantic necessity: such an entry could
     /// still match (lengths below the prefix length are simply unreachable,
-    /// since a route must be at least as long as the prefix that covers it).
+    /// since a prefix must be at least as long as the one that covers it).
     /// It is rejected so that [`PrefixMatch::min_len`] always means what it
     /// says.
     MinBelowPrefixLen,
@@ -96,8 +94,7 @@ impl std::fmt::Display for InvalidLengthRange {
 
 impl std::error::Error for InvalidLengthRange {}
 
-/// A prefix together with an inclusive window of acceptable route-prefix
-/// lengths.
+/// A prefix together with an inclusive window of acceptable prefix lengths.
 ///
 /// Invariant: `prefix.mask() ≤ min_len ≤ max_len ≤ A::BITS`, and the stored
 /// prefix has its host bits zeroed. Two entries built from the same network
@@ -114,8 +111,8 @@ pub struct PrefixMatch<A: IpAddress> {
 }
 
 impl<A: IpAddress> PrefixMatch<A> {
-    /// Creates an entry for `prefix` accepting route prefixes whose length is
-    /// in `min_len..=max_len`.
+    /// Creates an entry accepting prefixes inside `prefix` whose length is in
+    /// `min_len..=max_len`.
     ///
     /// Host bits in `prefix` are zeroed.
     ///
@@ -137,11 +134,7 @@ impl<A: IpAddress> PrefixMatch<A> {
     /// assert_eq!(PrefixMatch::new(p, 24, 16), Err(InvalidLengthRange::MinAboveMax));
     /// assert_eq!(PrefixMatch::new(p, 4, 24), Err(InvalidLengthRange::MinBelowPrefixLen));
     /// ```
-    pub fn new(
-        prefix: IpPrefix<A>,
-        min_len: u8,
-        max_len: u8,
-    ) -> Result<Self, InvalidLengthRange> {
+    pub fn new(prefix: IpPrefix<A>, min_len: u8, max_len: u8) -> Result<Self, InvalidLengthRange> {
         if max_len > A::BITS {
             return Err(InvalidLengthRange::MaxAboveAddrBits);
         }
@@ -184,13 +177,40 @@ impl<A: IpAddress> PrefixMatch<A> {
         }
     }
 
+    /// Creates an entry matching `prefix` and every more-specific prefix
+    /// inside it: lengths from `prefix.mask()` through the address width.
+    ///
+    /// Host bits in `prefix` are zeroed. The result is the same as
+    /// `PrefixMatch::new(prefix, prefix.mask(), A::BITS)`, which cannot fail.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::net::Ipv4Addr;
+    /// use ipnetx::{prefix::IpPrefix, prefix_match::PrefixMatch};
+    ///
+    /// let ten = IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap();
+    /// let entry = PrefixMatch::or_longer(ten);
+    /// assert!(entry.matches(ten));
+    /// assert!(entry.matches(IpPrefix::new(Ipv4Addr::new(10, 1, 2, 3), 32).unwrap()));
+    /// assert_eq!((entry.min_len(), entry.max_len()), (8, 32));
+    /// ```
+    #[must_use]
+    pub fn or_longer(prefix: IpPrefix<A>) -> Self {
+        Self {
+            prefix: prefix.masked(),
+            min_len: prefix.mask(),
+            max_len: A::BITS,
+        }
+    }
+
     /// The entry's prefix, with host bits zeroed.
     #[must_use]
     pub fn prefix(&self) -> IpPrefix<A> {
         self.prefix
     }
 
-    /// Shortest route-prefix length accepted by [`matches`](Self::matches).
+    /// Shortest prefix length accepted by [`matches`](Self::matches).
     ///
     /// Always at least the prefix length of [`prefix`](Self::prefix).
     #[must_use]
@@ -198,18 +218,16 @@ impl<A: IpAddress> PrefixMatch<A> {
         self.min_len
     }
 
-    /// Longest route-prefix length accepted by [`matches`](Self::matches).
+    /// Longest prefix length accepted by [`matches`](Self::matches).
     #[must_use]
     pub fn max_len(&self) -> u8 {
         self.max_len
     }
 
-    /// Returns `true` if `route` lies inside this entry's prefix, ignoring
+    /// Returns `true` if `candidate` lies inside this entry's prefix, ignoring
     /// the length window.
     ///
-    /// That is: `route` is at least as long as the entry's prefix and agrees
-    /// with it on the entry's prefix length in leading bits. A route equal to
-    /// the entry's prefix is covered. Host bits of `route` are ignored.
+    /// This is [`IpPrefix::covers`] applied to the entry's prefix.
     ///
     /// # Examples
     ///
@@ -225,19 +243,12 @@ impl<A: IpAddress> PrefixMatch<A> {
     /// assert!(!e.covers(shorter));  // shorter than the entry: not inside it
     /// ```
     #[must_use]
-    pub fn covers(&self, route: IpPrefix<A>) -> bool {
-        // `IpPrefix::contains` compares only the leading `self.prefix.mask()`
-        // bits, so host bits in `route` cannot affect the result once we know
-        // the route is at least that long.
-        route.mask() >= self.prefix.mask() && self.prefix.contains(route.ip())
+    pub fn covers(&self, candidate: IpPrefix<A>) -> bool {
+        self.prefix.covers(&candidate)
     }
 
-    /// Returns `true` if `route` is [covered](Self::covers) and its length is
-    /// within `min_len..=max_len`.
-    ///
-    /// This is a length-window match only; it is **not** RFC 6811's
-    /// "Matched", which also compares origin ASNs. See the
-    /// [module documentation](self).
+    /// Returns `true` if `candidate` is [covered](Self::covers) and its length
+    /// is within `min_len..=max_len`.
     ///
     /// # Examples
     ///
@@ -252,9 +263,9 @@ impl<A: IpAddress> PrefixMatch<A> {
     /// assert!(!e.matches(IpPrefix::new(Ipv4Addr::new(11, 1, 0, 0), 16).unwrap()));
     /// ```
     #[must_use]
-    pub fn matches(&self, route: IpPrefix<A>) -> bool {
-        let len = route.mask();
-        self.min_len <= len && len <= self.max_len && self.covers(route)
+    pub fn matches(&self, candidate: IpPrefix<A>) -> bool {
+        let len = candidate.mask();
+        self.min_len <= len && len <= self.max_len && self.covers(candidate)
     }
 }
 
@@ -306,8 +317,7 @@ mod tests {
     /// Oracle 3: truncate the route to the entry's length and compare as
     /// canonical prefixes (only meaningful when the route is long enough).
     fn covers_truncation<A: IpAddress>(p: IpPrefix<A>, r: IpPrefix<A>) -> bool {
-        r.mask() >= p.mask()
-            && IpPrefix::new(r.ip(), p.mask()).unwrap().masked() == p.masked()
+        r.mask() >= p.mask() && IpPrefix::new(r.ip(), p.mask()).unwrap().masked() == p.masked()
     }
 
     fn v4(a: u8, b: u8, c: u8, d: u8, len: u8) -> IpPrefix<Ipv4Addr> {
@@ -442,12 +452,24 @@ mod tests {
     #[test]
     fn constructor_error_variants() {
         let p = v4(10, 0, 0, 0, 8);
-        assert_eq!(PrefixMatch::new(p, 8, 33), Err(InvalidLengthRange::MaxAboveAddrBits));
-        assert_eq!(PrefixMatch::new(p, 24, 16), Err(InvalidLengthRange::MinAboveMax));
-        assert_eq!(PrefixMatch::new(p, 7, 24), Err(InvalidLengthRange::MinBelowPrefixLen));
+        assert_eq!(
+            PrefixMatch::new(p, 8, 33),
+            Err(InvalidLengthRange::MaxAboveAddrBits)
+        );
+        assert_eq!(
+            PrefixMatch::new(p, 24, 16),
+            Err(InvalidLengthRange::MinAboveMax)
+        );
+        assert_eq!(
+            PrefixMatch::new(p, 7, 24),
+            Err(InvalidLengthRange::MinBelowPrefixLen)
+        );
         // max_len < p needs no check of its own: with min == max < p it is a
         // MinBelowPrefixLen, and with min > max it is a MinAboveMax.
-        assert_eq!(PrefixMatch::new(p, 4, 4), Err(InvalidLengthRange::MinBelowPrefixLen));
+        assert_eq!(
+            PrefixMatch::new(p, 4, 4),
+            Err(InvalidLengthRange::MinBelowPrefixLen)
+        );
         // IPv6 width.
         assert_eq!(
             PrefixMatch::new(v6("::", 0), 0, 129),
@@ -459,10 +481,16 @@ mod tests {
     fn constructor_error_precedence() {
         let p = v4(10, 0, 0, 0, 8);
         // max too large AND min > max AND min < p: MaxAboveAddrBits wins.
-        assert_eq!(PrefixMatch::new(p, 40, 33), Err(InvalidLengthRange::MaxAboveAddrBits));
+        assert_eq!(
+            PrefixMatch::new(p, 40, 33),
+            Err(InvalidLengthRange::MaxAboveAddrBits)
+        );
         // min > max AND min < p: min 6, max 5, p 8 → MinAboveMax is reported
         // before MinBelowPrefixLen.
-        assert_eq!(PrefixMatch::new(p, 6, 5), Err(InvalidLengthRange::MinAboveMax));
+        assert_eq!(
+            PrefixMatch::new(p, 6, 5),
+            Err(InvalidLengthRange::MinAboveMax)
+        );
     }
 
     #[test]
@@ -491,7 +519,30 @@ mod tests {
         let c = PrefixMatch::new(v4(10, 0, 0, 0, 8), 16, 25).unwrap();
         assert_ne!(a, c);
         // exact() masks too.
-        assert_eq!(PrefixMatch::exact(v4(10, 9, 9, 9, 8)), PrefixMatch::exact(v4(10, 0, 0, 0, 8)));
+        assert_eq!(
+            PrefixMatch::exact(v4(10, 9, 9, 9, 8)),
+            PrefixMatch::exact(v4(10, 0, 0, 0, 8))
+        );
+    }
+
+    #[test]
+    fn or_longer_spans_prefix_length_through_address_width() {
+        let e = PrefixMatch::or_longer(v4(10, 9, 9, 9, 8));
+        assert_eq!(e.prefix(), v4(10, 0, 0, 0, 8));
+        assert_eq!((e.min_len(), e.max_len()), (8, 32));
+        assert_eq!(e, PrefixMatch::new(v4(10, 0, 0, 0, 8), 8, 32).unwrap());
+        assert!(e.matches(v4(10, 0, 0, 0, 8)));
+        assert!(e.matches(v4(10, 1, 2, 3, 32)));
+        assert!(!e.matches(v4(10, 0, 0, 0, 7)));
+        assert!(!e.matches(v4(11, 0, 0, 0, 16)));
+
+        let e = PrefixMatch::or_longer(v6("2001:db8::", 32));
+        assert_eq!((e.min_len(), e.max_len()), (32, 128));
+        assert!(e.matches(v6("2001:db8::1", 128)));
+
+        // On a host route there is nothing longer.
+        let host = v4(192, 0, 2, 1, 32);
+        assert_eq!(PrefixMatch::or_longer(host), PrefixMatch::exact(host));
     }
 
     #[test]
@@ -507,38 +558,42 @@ mod tests {
     /// A v4 entry prefix plus a route biased to be related to it half the
     /// time (so covered routes are common, not vanishingly rare).
     fn arb_v4_pair() -> impl Strategy<Value = (IpPrefix<Ipv4Addr>, IpPrefix<Ipv4Addr>)> {
-        let entry = (any::<u32>(), 0u8..=32).prop_map(|(a, l)| {
-            IpPrefix::new(Ipv4Addr::from_bits(a), l).unwrap()
-        });
+        let entry = (any::<u32>(), 0u8..=32)
+            .prop_map(|(a, l)| IpPrefix::new(Ipv4Addr::from_bits(a), l).unwrap());
         entry.prop_flat_map(|p| {
             let related = (any::<u32>(), 0u8..=32).prop_map(move |(suffix, extra)| {
                 let len = p.mask() + extra.min(32 - p.mask());
                 // keep the entry's leading bits, randomize the rest
-                let keep = if p.mask() == 0 { 0 } else { u32::MAX << (32 - p.mask() as u32) };
+                let keep = if p.mask() == 0 {
+                    0
+                } else {
+                    u32::MAX << (32 - p.mask() as u32)
+                };
                 let addr = (p.ip().to_bits() & keep) | (suffix & !keep);
                 IpPrefix::new(Ipv4Addr::from_bits(addr), len).unwrap()
             });
-            let unrelated = (any::<u32>(), 0u8..=32).prop_map(|(a, l)| {
-                IpPrefix::new(Ipv4Addr::from_bits(a), l).unwrap()
-            });
+            let unrelated = (any::<u32>(), 0u8..=32)
+                .prop_map(|(a, l)| IpPrefix::new(Ipv4Addr::from_bits(a), l).unwrap());
             (Just(p), prop_oneof![related, unrelated])
         })
     }
 
     fn arb_v6_pair() -> impl Strategy<Value = (IpPrefix<Ipv6Addr>, IpPrefix<Ipv6Addr>)> {
-        let entry = (any::<u128>(), 0u8..=128).prop_map(|(a, l)| {
-            IpPrefix::new(Ipv6Addr::from_bits(a), l).unwrap()
-        });
+        let entry = (any::<u128>(), 0u8..=128)
+            .prop_map(|(a, l)| IpPrefix::new(Ipv6Addr::from_bits(a), l).unwrap());
         entry.prop_flat_map(|p| {
             let related = (any::<u128>(), 0u8..=128).prop_map(move |(suffix, extra)| {
                 let len = p.mask() + extra.min(128 - p.mask());
-                let keep = if p.mask() == 0 { 0 } else { u128::MAX << (128 - p.mask() as u32) };
+                let keep = if p.mask() == 0 {
+                    0
+                } else {
+                    u128::MAX << (128 - p.mask() as u32)
+                };
                 let addr = (p.ip().to_bits() & keep) | (suffix & !keep);
                 IpPrefix::new(Ipv6Addr::from_bits(addr), len).unwrap()
             });
-            let unrelated = (any::<u128>(), 0u8..=128).prop_map(|(a, l)| {
-                IpPrefix::new(Ipv6Addr::from_bits(a), l).unwrap()
-            });
+            let unrelated = (any::<u128>(), 0u8..=128)
+                .prop_map(|(a, l)| IpPrefix::new(Ipv6Addr::from_bits(a), l).unwrap());
             (Just(p), prop_oneof![related, unrelated])
         })
     }
@@ -607,6 +662,20 @@ mod tests {
             let wide_max = max.saturating_add(hi_slack).min(32);
             let wide = PrefixMatch::new(p, wide_min, wide_max).unwrap();
             if narrow.matches(r) { prop_assert!(wide.matches(r)); }
+        }
+
+        #[test]
+        fn or_longer_matches_whatever_is_covered_v4((p, r) in arb_v4_pair()) {
+            let e = PrefixMatch::or_longer(p);
+            prop_assert_eq!(e.matches(r), covers_bits_v4(p, r));
+            prop_assert_eq!(Ok(e), PrefixMatch::new(p, p.mask(), 32));
+        }
+
+        #[test]
+        fn or_longer_matches_whatever_is_covered_v6((p, r) in arb_v6_pair()) {
+            let e = PrefixMatch::or_longer(p);
+            prop_assert_eq!(e.matches(r), covers_bits_v6(p, r));
+            prop_assert_eq!(Ok(e), PrefixMatch::new(p, p.mask(), 128));
         }
 
         #[test]

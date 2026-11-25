@@ -9,6 +9,7 @@ use proptest::prelude::*;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use crate::{
+    interfaces::IpAddress,
     ipset::{IpSet, IpSetBuilder},
     prefix::IpPrefix,
     range::IpRange,
@@ -922,3 +923,64 @@ proptest! {
         prop_assert_eq!(a.complement().contains_ip(ip), !a.contains_ip(ip));
     }
 }
+
+// ── IpPrefix::covers ──────────────────────────────────────────────────────────
+
+/// Two prefixes that are often nested: independently random pairs almost never
+/// are, so half the time the second one reuses the first one's address.
+fn arb_related_pair<A>(
+    first: impl Strategy<Value = IpPrefix<A>>,
+    second: impl Strategy<Value = IpPrefix<A>>,
+    bits: u8,
+) -> impl Strategy<Value = (IpPrefix<A>, IpPrefix<A>)>
+where
+    A: IpAddress + 'static,
+{
+    (first, second, 0..=bits, any::<bool>()).prop_map(|(a, b, len, reuse)| {
+        let b = if reuse {
+            IpPrefix::new(a.ip(), len).unwrap()
+        } else {
+            b
+        };
+        (a, b)
+    })
+}
+
+macro_rules! covers_props {
+    ($by_range:ident, $overlap:ident, $mutual:ident, $prefix:ident, $bits:expr) => {
+        proptest! {
+            #[test]
+            fn $by_range((a, b) in arb_related_pair($prefix(), $prefix(), $bits)) {
+                let (outer, inner) = (a.to_range(), b.to_range());
+                let expected = outer.start() <= inner.start() && inner.end() <= outer.end();
+                prop_assert_eq!(a.covers(&b), expected);
+            }
+
+            #[test]
+            fn $overlap((a, b) in arb_related_pair($prefix(), $prefix(), $bits)) {
+                // CIDR blocks either nest or are disjoint.
+                prop_assert_eq!(a.overlaps(&b), a.covers(&b) || b.covers(&a));
+            }
+
+            #[test]
+            fn $mutual((a, b) in arb_related_pair($prefix(), $prefix(), $bits)) {
+                prop_assert_eq!(a.covers(&b) && b.covers(&a), a.masked() == b.masked());
+            }
+        }
+    };
+}
+
+covers_props!(
+    prop_v4_covers_is_range_containment,
+    prop_v4_overlap_is_cover_either_way,
+    prop_v4_mutual_cover_is_same_network,
+    arb_ipv4_prefix,
+    32
+);
+covers_props!(
+    prop_v6_covers_is_range_containment,
+    prop_v6_overlap_is_cover_either_way,
+    prop_v6_mutual_cover_is_same_network,
+    arb_ipv6_prefix,
+    128
+);

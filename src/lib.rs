@@ -1,7 +1,7 @@
 #![doc = include_str!("../README.md")]
 //! IP address range, prefix, and set operations for IPv4 and IPv6.
 //!
-//! `ipnetx` provides three core types built on a single generic
+//! `ipnetx` provides these core types, built on a single generic
 //! [`interfaces::IpAddress`] trait that is sealed to [`std::net::Ipv4Addr`]
 //! and [`std::net::Ipv6Addr`]:
 //!
@@ -10,7 +10,7 @@
 //! | [`range::IpRange`] | An inclusive `[start, end]` address span |
 //! | [`prefix::IpPrefix`] | A CIDR prefix (`ip/mask`) |
 //! | [`ipset::IpSet`] | An immutable, normalized set of address ranges |
-//! | [`prefix_match::PrefixMatch`] | A prefix plus a window of acceptable route-prefix lengths |
+//! | [`prefix_match::PrefixMatch`] | A prefix plus a window of acceptable prefix lengths |
 //!
 //! Sets are constructed through [`ipset::IpSetBuilder`], which accepts
 //! arbitrary ranges and prefixes in any order and produces a sorted,

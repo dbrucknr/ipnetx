@@ -20,7 +20,7 @@ whether two addresses are equal. Real questions look like:
 - "Do any of the ranges in this allow-list overlap with the ranges in this block-list?"
 - "I have 50,000 IPs in my firewall rules. Can I reduce them to the minimal set of CIDR prefixes?"
 
-`ipnetx` gives you three composable building blocks for answering those questions,
+`ipnetx` gives you composable building blocks for answering those questions,
 for both IPv4 and IPv6, using the address types already in `std::net`:
 
 | Type | What it represents |
@@ -28,6 +28,7 @@ for both IPv4 and IPv6, using the address types already in `std::net`:
 | `IpRange<A>` | A contiguous span of addresses: `10.0.0.0 – 10.255.255.255` |
 | `IpPrefix<A>` | A CIDR block: `10.0.0.0/8` |
 | `IpSet<A>` | An arbitrary collection of addresses built from any mix of ranges and prefixes |
+| `PrefixMatch<A>` | A prefix rule with a length window: "inside `10.0.0.0/8`, `/16` to `/24`" |
 
 > **Background: what is a CIDR prefix?**
 >
@@ -78,8 +79,9 @@ Or: `cargo add ipnetx`
 > handle errors explicitly — propagate with `?`, match on `Result`/`Option`,
 > or use a crate like [`anyhow`](https://docs.rs/anyhow) for ergonomic error
 > context. The only fallible constructors in this crate are `IpPrefix::new`
-> (rejects out-of-range masks) and `.parse()` on `IpPrefix`/`IpRange`
-> (rejects malformed strings); the set operations themselves are infallible.
+> (rejects out-of-range masks), `PrefixMatch::new` (rejects invalid length
+> windows) and `.parse()` on `IpPrefix`/`IpRange` (rejects malformed strings);
+> the set operations themselves are infallible.
 
 ---
 
@@ -380,16 +382,33 @@ assert!(prefix.contains(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1)));
 assert!(!prefix.contains(Ipv6Addr::new(0x2001, 0x0db9, 0, 0, 0, 0, 0, 0)));
 ```
 
+### Prefix containment
+
+`contains` asks about one address. `covers` asks whether another prefix lies
+entirely inside this one: it must be at least as long and share the leading
+bits. A prefix covers itself, and host bits are ignored.
+
+```rust
+use std::net::Ipv4Addr;
+use ipnetx::prefix::IpPrefix;
+
+let wide = IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap();
+let narrow = IpPrefix::new(Ipv4Addr::new(10, 1, 2, 0), 24).unwrap();
+
+assert!(wide.covers(&narrow));
+assert!(!narrow.covers(&wide)); // unlike `overlaps`, direction matters
+```
+
 ---
 
 ## PrefixMatch — a prefix with a length window
 
 `IpSet` answers *address-coverage* questions, and it merges touching ranges to
 do so: a set holding `10.0.0.0/25` and `10.0.0.128/25` "covers" `10.0.0.0/24`.
-Routing policy often asks a different question — *is this route inside that
-prefix, and is its length acceptable?* — where the two /25s must **not**
+A filter or access rule often asks a different question — *is this block inside
+that prefix, and is its length acceptable?* — where the two /25s must **not**
 combine into a /24. `PrefixMatch` is that primitive: one prefix plus an
-inclusive window of route-prefix lengths.
+inclusive window of prefix lengths.
 
 ```rust
 use std::net::Ipv4Addr;
@@ -399,25 +418,26 @@ let ten = IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap();
 // Anything inside 10.0.0.0/8 whose length is between /16 and /24.
 let entry = PrefixMatch::new(ten, 16, 24).unwrap();
 
-let route = |b, len| IpPrefix::new(Ipv4Addr::new(10, b, 0, 0), len).unwrap();
-assert!(entry.matches(route(1, 16)));
-assert!(entry.matches(route(1, 24)));
-assert!(!entry.matches(route(1, 25)));  // longer than the window
-assert!(entry.covers(route(1, 25)));    // …but still inside 10.0.0.0/8
+let block = |b, len| IpPrefix::new(Ipv4Addr::new(10, b, 0, 0), len).unwrap();
+assert!(entry.matches(block(1, 16)));
+assert!(entry.matches(block(1, 24)));
+assert!(!entry.matches(block(1, 25)));  // longer than the window
+assert!(entry.covers(block(1, 25)));    // …but still inside 10.0.0.0/8
 ```
 
-* **`covers`** — the route is inside the entry's prefix; the window is ignored.
-* **`matches`** — covers *and* the route's length is within `min_len..=max_len`.
+* **`covers`** — the candidate is inside the entry's prefix; the window is ignored.
+* **`matches`** — covers *and* the candidate's length is within `min_len..=max_len`.
 
-The bounds are plain numbers. `ipnetx` makes **no claim of compatibility with
-any vendor's prefix-list syntax**; translating `ge`/`le`-style configuration
-into numeric bounds is the caller's job. `matches` is also **not** RFC 6811's
-"Matched" for RPKI origin validation, which additionally compares origin ASNs.
+| Constructor | Lengths accepted, for a prefix of length `p` |
+|---|---|
+| `PrefixMatch::exact(prefix)` | `p` only |
+| `PrefixMatch::or_longer(prefix)` | `p` through the address width |
+| `PrefixMatch::new(prefix, min, max)` | `min..=max` |
 
-`min_len` may not be shorter than the entry's own prefix length (such an entry
-could only ever behave like `min_len = prefix length`), and `max_len` may not
-exceed the address width; invalid combinations return an
-[`InvalidLengthRange`](prefix_match::InvalidLengthRange).
+`new` requires `p ≤ min ≤ max ≤ address width` and returns an
+[`InvalidLengthRange`](prefix_match::InvalidLengthRange) otherwise. The bounds
+are plain numbers; if you are translating from a configuration syntax, mapping
+it onto them is up to you.
 
 ---
 
