@@ -346,6 +346,42 @@ impl<A: IpAddress> IpSet<A> {
         }
     }
 
+    /// Returns `true` if every address in `prefix` is a member of this set.
+    ///
+    /// Host bits in `prefix` are ignored, so `10.1.2.3/16` is queried as
+    /// `10.1.0.0/16`. Like [`contains_range`](IpSet::contains_range), the whole
+    /// prefix must be enclosed within a *single* stored range: a prefix that
+    /// spans a gap between two stored ranges returns `false`.
+    ///
+    /// This asks about addresses, not about which prefixes were added. Adjacent
+    /// ranges are merged when the set is built, so a set made from two adjacent
+    /// `/25`s does contain their `/24`.
+    ///
+    /// Uses binary search — O(log n) in the number of stored ranges.
+    ///
+    /// Equivalent to `contains_range(prefix.to_range())`, with the same cost.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::net::Ipv4Addr;
+    /// use ipnetx::{ipset::IpSetBuilder, prefix::IpPrefix};
+    ///
+    /// let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+    /// builder.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap());
+    /// let set = builder.build();
+    ///
+    /// let inside = IpPrefix::new(Ipv4Addr::new(10, 1, 2, 3), 24).unwrap();
+    /// let wider = IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 7).unwrap();
+    /// assert!(set.contains_prefix(inside));
+    /// assert!(!set.contains_prefix(wider));
+    /// ```
+    #[must_use]
+    pub fn contains_prefix(&self, prefix: IpPrefix<A>) -> bool {
+        // `to_range` masks host bits itself, and its result is always valid.
+        self.contains_range(prefix.to_range())
+    }
+
     /// Returns `true` if this set and `other` share at least one address.
     ///
     /// Exploits the sorted, non-overlapping invariant of both sets to walk
@@ -1717,6 +1753,87 @@ mod tests {
         let ipset = builder.build();
         let query = IpRange::new(Ipv4Addr::new(10, 0, 0, 5), Ipv4Addr::new(10, 0, 0, 25));
         assert!(!ipset.contains_range(query));
+    }
+
+    // cargo test ipset::tests::test_v4_contains_prefix_basic
+    #[test]
+    fn test_v4_contains_prefix_basic() {
+        let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+        builder.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap());
+        let set = builder.build();
+
+        let p = |a, m| IpPrefix::new(a, m).unwrap();
+        // Equal, narrower, and host-bit-carrying prefixes are contained.
+        assert!(set.contains_prefix(p(Ipv4Addr::new(10, 0, 0, 0), 8)));
+        assert!(set.contains_prefix(p(Ipv4Addr::new(10, 1, 0, 0), 16)));
+        assert!(set.contains_prefix(p(Ipv4Addr::new(10, 1, 2, 3), 24)));
+        assert!(set.contains_prefix(p(Ipv4Addr::new(10, 255, 255, 255), 32)));
+        // Wider, partially overlapping, and disjoint prefixes are not.
+        assert!(!set.contains_prefix(p(Ipv4Addr::new(10, 0, 0, 0), 7)));
+        assert!(!set.contains_prefix(p(Ipv4Addr::new(0, 0, 0, 0), 0)));
+        assert!(!set.contains_prefix(p(Ipv4Addr::new(11, 0, 0, 0), 8)));
+    }
+
+    // cargo test ipset::tests::test_v4_contains_prefix_spans_gap
+    #[test]
+    fn test_v4_contains_prefix_spans_gap() {
+        // Two /25s with a hole between them; the covering /24 is not contained.
+        let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+        builder.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 26).unwrap());
+        builder.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 128), 26).unwrap());
+        let set = builder.build();
+        assert!(!set.contains_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 24).unwrap()));
+        assert!(set.contains_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 26).unwrap()));
+    }
+
+    // cargo test ipset::tests::test_v4_contains_prefix_empty_set
+    #[test]
+    fn test_v4_contains_prefix_empty_set() {
+        let set = IpSetBuilder::<Ipv4Addr>::new().build();
+        assert!(!set.contains_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap()));
+    }
+
+    // cargo test ipset::tests::test_v6_contains_prefix_basic
+    #[test]
+    fn test_v6_contains_prefix_basic() {
+        let base: Ipv6Addr = "2001:db8::".parse().unwrap();
+        let mut builder = IpSetBuilder::<Ipv6Addr>::new();
+        builder.add_prefix(IpPrefix::new(base, 32).unwrap());
+        let set = builder.build();
+
+        let inside: Ipv6Addr = "2001:db8:abcd::1".parse().unwrap();
+        assert!(set.contains_prefix(IpPrefix::new(inside, 48).unwrap()));
+        assert!(set.contains_prefix(IpPrefix::new(inside, 128).unwrap()));
+        assert!(!set.contains_prefix(IpPrefix::new(base, 16).unwrap()));
+        assert!(!set.contains_prefix(IpPrefix::new("2001:db9::".parse().unwrap(), 32).unwrap()));
+        // /0 over a set that is not the whole space
+        assert!(!set.contains_prefix(IpPrefix::new(Ipv6Addr::UNSPECIFIED, 0).unwrap()));
+    }
+
+    // cargo test ipset::tests::test_contains_prefix_matches_masked_range_form
+    #[test]
+    fn test_contains_prefix_matches_masked_range_form() {
+        // Host bits must not matter:
+        // contains_prefix(p) == contains_range(p.masked().to_range()).
+        let mut builder = IpSetBuilder::<Ipv4Addr>::new();
+        builder.add_prefix(IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 8).unwrap());
+        builder.add_prefix(IpPrefix::new(Ipv4Addr::new(192, 168, 0, 0), 16).unwrap());
+        let set = builder.build();
+        for ip in [
+            Ipv4Addr::new(10, 9, 8, 7),
+            Ipv4Addr::new(192, 168, 200, 1),
+            Ipv4Addr::new(172, 16, 0, 1),
+            Ipv4Addr::new(255, 255, 255, 255),
+        ] {
+            for mask in 0..=32u8 {
+                let p = IpPrefix::new(ip, mask).unwrap();
+                assert_eq!(
+                    set.contains_prefix(p),
+                    set.contains_range(p.masked().to_range()),
+                    "{p}"
+                );
+            }
+        }
     }
 
     // cargo test ipset::tests::test_v4_contains_range_exceeds_stored

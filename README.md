@@ -496,6 +496,13 @@ let outer = IpRange::new(Ipv4Addr::new(9, 0, 0, 0),  Ipv4Addr::new(10, 0, 0, 255
 
 assert!(set.contains_range(inner));  // fully inside 10/8
 assert!(!set.contains_range(outer)); // starts before 10/8 — not contained
+
+// Prefix containment — host bits are ignored; same single-range rule as above
+let inside = IpPrefix::new(Ipv4Addr::new(10, 1, 2, 3), 24).unwrap();
+let too_wide = IpPrefix::new(Ipv4Addr::new(10, 0, 0, 0), 7).unwrap();
+
+assert!(set.contains_prefix(inside));     // 10.1.2.0/24 is inside 10/8
+assert!(!set.contains_prefix(too_wide));  // 10/7 extends past 10/8
 ```
 
 ### Overlap between two sets
@@ -769,18 +776,26 @@ assert!(set.contains_ip(Ipv4Addr::new(192, 168, 1, 100)));
 
 All operations are designed to scale predictably. The table below shows measured
 times across three set sizes so the scaling behaviour is visible, not just a
-single snapshot.
+single snapshot. Every benchmark set holds exactly 100, 1 000 or 10 000 *stored*
+ranges: ranges are separated by gaps so normalization cannot merge them, and the
+benchmark harness asserts the stored-range count.
 
 | Operation | Complexity | 100 ranges | 1 000 ranges | 10 000 ranges | Takeaway |
 |---|---|---|---|---|---|
-| `contains_ip` | O(log n) | ~901 ps | ~893 ps | ~890 ps | Effectively flat — log growth is invisible at these sizes |
-| `build` (adds only) | O(n log n) | ~465 ns | ~2.65 µs | ~22.9 µs | ~5× slower per 10× more ranges, as expected |
-| `build` (with removals) | O((n+k) log(n+k)) | ~809 ns | ~4.04 µs | ~35.1 µs | ~1.5× over adds-only for 50% removal rate; removals are O(1) at call time |
-| `union` | O((m+n) log(m+n)) | ~40 ns | ~40 ns | ~40 ns | Allocation dominates at these sizes |
-| `intersection` | O(m + n) | ~22 ns | ~22 ns | ~22 ns | Flat — data fits in L1 cache |
-| `difference` | O(m + n) | ~22 ns | ~22 ns | ~22 ns | Same story as intersection |
-| `complement` | O(n) | ~21 ns | ~22 ns | ~22 ns | Single pass over stored ranges |
-| `count` | O(n) | ~1.14 ns | ~1.13 ns | ~1.13 ns | Compiler optimises the summation loop |
+| `contains_ip` | O(log n) | ~5.5 ns | ~8.9 ns | ~14.2 ns | ~1.6× per 10× more ranges — the log growth is visible but tiny |
+| `contains_prefix` (IPv4) | O(log n) | ~6.8 ns | ~10.1 ns | ~15.8 ns | Same binary search as `contains_ip`, plus one prefix → range conversion |
+| `contains_prefix` (IPv6) | O(log n) | ~18 ns | ~21 ns | ~27 ns | 128-bit comparisons cost more than IPv4, same growth shape |
+| `build` (adds only) | O(n log n) | ~580 ns | ~3.3 µs | ~30 µs | ~5–9× per 10× more ranges (input is reverse-sorted, so real sort work) |
+| `build` (with removals) | O((n+k) log(n+k)) | ~1.3 µs | ~7.0 µs | ~63 µs | ~2× over adds-only for a 50% removal rate; removals are O(1) at call time |
+| `union` | O(m + n) | ~520 ns | ~4.3 µs | ~45 µs | Linear: ~10× per 10× more ranges |
+| `intersection` | O(m + n) | ~420 ns | ~2.6 µs | ~25 µs | Linear two-pointer walk |
+| `difference` | O(m + n) | ~390 ns | ~1.9 µs | ~18 µs | Linear two-pointer walk |
+| `complement` | O(n) | ~350 ns | ~1.3 µs | ~13 µs | Single pass over stored ranges |
+| `count` | O(n) | ~125 ns | ~1.2 µs | ~12 µs | Single summation pass |
+
+`contains_prefix` is a clarity-oriented convenience over
+`contains_range(prefix.to_range())`; the two benchmark identically, so choose
+whichever reads better at the call site.
 
 **`prefixes()` — alignment sensitivity**
 
@@ -791,17 +806,24 @@ fan-out makes alignment the dominant factor in cost:
 
 | Case | 1 range | 100 ranges | 1 000 ranges | 10 000 ranges |
 |---|---|---|---|---|
-| aligned (1 prefix per range) | ~22 ns | ~71 ns | ~115 ns | ~111 ns |
-| unaligned (14 prefixes per range) | ~138 ns | ~14.6 µs | ~142 µs | ~1.38 ms |
+| aligned (1 prefix per range) | ~27 ns | ~4.0 µs | ~36 µs | ~350 µs |
+| unaligned (14 prefixes per range) | ~143 ns | ~16.5 µs | ~158 µs | ~1.6 ms |
 
-For well-aligned data (BGP tables, RFC 1918 blocks) `prefixes()` is fast at any
-scale. For arbitrary firewall ranges, expect roughly 200× the cost of the
-aligned case at 100 ranges, growing with the number of CIDR prefixes produced.
+Cost is linear in the number of stored ranges for both cases. Unaligned data
+costs roughly 4–5× the aligned case — the 14× prefix fan-out is partly offset by
+the fixed per-range overhead (allocation and iteration) that both cases pay.
 
-> Measurements taken on a MacBook Pro M2 Max, `ipnetx v0.2.2`, release profile.
+> Measurements taken on a MacBook Pro M2 Max, release profile, with the `IpSet`
+> code first released in `ipnetx v0.3.1`.
 > Times reflect data that fits comfortably in CPU cache — a realistic scenario
 > for most workloads. At BGP-table scale (~900k routes) the bottleneck shifts
 > to memory bandwidth rather than compute.
+>
+> *Correction:* figures published up to v0.3.0 showed `union`, `intersection`,
+> `difference` and `complement` as flat across set sizes. Those benchmarks built
+> their input from back-to-back /24 blocks, which `build()` merges into a single
+> stored range, so they were measuring a one-element set. The numbers above come
+> from sets with gaps and are the ones to trust.
 
 To run the benchmarks on your own hardware:
 
